@@ -1,0 +1,9 @@
+# Storage is OPFS-only — no database
+
+Easy-scan persists its document library entirely in the **Origin Private File System (OPFS)**, with no database layer (no IndexedDB, no Dexie, no SQLite). Metadata lives in a single `library.json` (documents and their pages; each Page carries its `quad`, enhancement mode, and a reference to its source file); source JPEGs are stored as files under per-document folders. The CV Web Worker writes image bytes to OPFS directly via `FileSystemSyncAccessHandle`; the UI observes changes through a small `useSyncExternalStore` store. We request persistent storage with `navigator.storage.persist()` to protect scans from eviction.
+
+**Why:** our access patterns are trivial — list documents, open one by id, delete — so we gain nothing from a database's indexing/query power, and we drop a whole dependency and a second storage substrate. OPFS is faster than IndexedDB for large blobs, and the worker already produces the image bytes, so writing them straight to OPFS is a natural fit. Documents-as-folders mirrors the domain.
+
+**Trade-off accepted:** no indexed queries and no multi-file transactions. We don't need queries in the MVP; multi-file writes (e.g. adding a page) are made safe by writing the JPEG first and atomically replacing `library.json` (temp + rename), with optional orphan reconciliation on startup. Single-tab concurrency is assumed (`navigator.locks` if that ever changes).
+
+**Safeguard:** all storage sits behind a port/interface (`listDocuments`, `getDocument`, `putDocument`, `deleteDocument`, `putPageImage`, …). If a future version needs real queries (e.g. full-text search over OCR text), we implement the same interface over IndexedDB or SQLite-WASM without touching the rest of the app. This supersedes the earlier provisional choice of Dexie.

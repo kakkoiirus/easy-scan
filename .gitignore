@@ -1,0 +1,23 @@
+# dependencies
+node_modules
+
+# build output
+dist
+dist-ssr
+
+# typescript build cache
+*.tsbuildinfo
+node_modules/.tmp
+
+# local env / secrets
+*.local
+.env
+.env.*
+!.env.example
+
+# os / editor
+.DS_Store
+.idea
+.vscode/*
+!.vscode/extensions.json
+.claude
