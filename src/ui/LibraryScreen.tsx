@@ -1,7 +1,8 @@
+import { Button, Paper, Stack, Text, Title, UnstyledButton } from '@mantine/core'
 import { useState } from 'react'
 import { createDemoDocument, useDocuments } from '../storage/useDocuments'
-import { ScreenShell } from './ScreenShell'
 import type { Bytes } from '../types'
+import { ScreenShell } from './ScreenShell'
 
 interface LibraryScreenProps {
   onOpenCamera: () => void
@@ -26,39 +27,49 @@ export function LibraryScreen({ onOpenCamera, onOpenDocument }: LibraryScreenPro
     <ScreenShell
       title="Документы"
       action={
-        <button className="btn btn--ghost" onClick={onOpenCamera}>
+        <Button variant="subtle" size="sm" onClick={onOpenCamera}>
           Камера
-        </button>
+        </Button>
       }
     >
       {docs.length === 0 ? (
-        <div className="empty">
-          <p className="empty__title">Пока пусто</p>
-          <p className="empty__hint">Отсканируйте первый документ камерой.</p>
-          <button className="btn btn--primary" onClick={onOpenCamera}>
+        <Stack align="center" justify="center" gap="xs" mih="55vh">
+          <Title order={5} fw={500}>
+            Пока пусто
+          </Title>
+          <Text size="sm" c="dimmed" ta="center">
+            Отсканируйте первый документ камерой.
+          </Text>
+          <Button mt="xs" onClick={onOpenCamera}>
             Сканировать
-          </button>
-        </div>
+          </Button>
+        </Stack>
       ) : (
-        <ul className="doc-list">
+        <Stack gap="sm">
           {docs.map((d) => (
-            <li key={d.id}>
-              <button className="doc-row" onClick={() => onOpenDocument(d.id)}>
-                <span className="doc-row__title">{d.title}</span>
-                <span className="doc-row__meta">
-                  {d.pageCount} стр. · {new Date(d.createdAt).toLocaleDateString()}
-                </span>
-              </button>
-            </li>
+            <UnstyledButton key={d.id} onClick={() => onOpenDocument(d.id)} w="100%">
+              <Paper p="md" withBorder w="100%">
+                <Stack gap={2}>
+                  <Text fw={500} size="sm">
+                    {d.title}
+                  </Text>
+                  <Text size="xs" c="dimmed">
+                    {d.pageCount} стр. · {new Date(d.createdAt).toLocaleDateString()}
+                  </Text>
+                </Stack>
+              </Paper>
+            </UnstyledButton>
           ))}
-        </ul>
+        </Stack>
       )}
 
       <div className="devbar">
-        <button className="btn btn--ghost" onClick={handleDemo} disabled={busy}>
-          {busy ? 'Создаю…' : '＋ Демо-документ'}
-        </button>
-        <span className="devbar__hint">dev: проверка OPFS-хранилища</span>
+        <Button variant="light" size="xs" onClick={handleDemo} loading={busy}>
+          ＋ Демо-документ
+        </Button>
+        <Text size="xs" c="dimmed">
+          dev: проверка OPFS-хранилища
+        </Text>
       </div>
     </ScreenShell>
   )

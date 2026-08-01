@@ -1,3 +1,4 @@
+import { Button, Image, Stack, Text } from '@mantine/core'
 import { useEffect, useState } from 'react'
 import { opfsStorage } from '../storage/opfs-storage'
 import { removeDocument } from '../storage/useDocuments'
@@ -36,20 +37,25 @@ export function DocumentScreen({ docId, onBack }: DocumentScreenProps) {
     <ScreenShell
       title={doc?.title ?? 'Документ'}
       action={
-        <button className="btn btn--ghost" onClick={onBack}>
+        <Button variant="subtle" size="sm" onClick={onBack}>
           Назад
-        </button>
+        </Button>
       }
     >
-      <div className="doc-view">
+      <Stack gap="md" align="stretch">
         {thumbUrl ? (
-          <img className="thumb" src={thumbUrl} alt={doc?.title} />
+          <Image src={thumbUrl} alt={doc?.title} radius="md" bg="white" />
         ) : (
-          <div className="thumb thumb--placeholder">нет превью</div>
+          <Text size="sm" c="dimmed" ta="center">
+            нет превью
+          </Text>
         )}
-        <p className="muted">{doc ? `${doc.pages.length} стр.` : 'загрузка…'}</p>
-        <button
-          className="btn btn--danger"
+        <Text size="sm" c="dimmed" ta="center">
+          {doc ? `${doc.pages.length} стр.` : 'загрузка…'}
+        </Text>
+        <Button
+          color="red"
+          variant="light"
           disabled={!doc}
           onClick={async () => {
             await removeDocument(docId)
@@ -57,9 +63,11 @@ export function DocumentScreen({ docId, onBack }: DocumentScreenProps) {
           }}
         >
           Удалить
-        </button>
-        <p className="muted">Экспорт в PDF — этап M7.</p>
-      </div>
+        </Button>
+        <Text size="xs" c="dimmed" ta="center">
+          Экспорт в PDF — этап M7.
+        </Text>
+      </Stack>
     </ScreenShell>
   )
 }

@@ -4,6 +4,7 @@ A client-side PWA document scanner: camera → detect document edges → perspec
 
 ## Stack
 - Vite + React + TypeScript
+- **Mantine UI** (`@mantine/core` + `@mantine/hooks`) — all components & theming; `MantineProvider` wraps the app (dark scheme, theme in `src/ui/theme.ts`)
 - `vite-plugin-pwa` (manifest + service worker — installable, offline)
 - OpenCV.js running inside a Web Worker (ADR-0002) — added at M2
 - `pdf-lib` for PDF export — added at M7

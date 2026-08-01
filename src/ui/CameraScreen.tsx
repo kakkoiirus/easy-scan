@@ -1,3 +1,4 @@
+import { Button, Stack, Text, Title } from '@mantine/core'
 import { useEffect, useState } from 'react'
 import { cvClient } from '../worker/cv-client'
 import { ScreenShell } from './ScreenShell'
@@ -28,17 +29,21 @@ export function CameraScreen({ onBack }: CameraScreenProps) {
     <ScreenShell
       title="Камера"
       action={
-        <button className="btn btn--ghost" onClick={onBack}>
+        <Button variant="subtle" size="sm" onClick={onBack}>
           Назад
-        </button>
+        </Button>
       }
     >
-      <div className="placeholder">
-        <div className="placeholder__icon">📷</div>
-        <p className="placeholder__title">Камера — этап M1</p>
-        <p className="placeholder__hint">Здесь будет видеопоток и захват стоп-кадра.</p>
-        <p className="muted">{status}</p>
-      </div>
+      <Stack align="center" justify="center" gap="xs" mih="60vh">
+        <Text style={{ fontSize: 48 }}>📷</Text>
+        <Title order={5}>Камера — этап M1</Title>
+        <Text size="sm" c="dimmed" ta="center">
+          Здесь будет видеопоток и захват стоп-кадра.
+        </Text>
+        <Text size="xs" c="dimmed">
+          {status}
+        </Text>
+      </Stack>
     </ScreenShell>
   )
 }

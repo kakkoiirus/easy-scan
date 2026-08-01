@@ -1,3 +1,4 @@
+import { Box, Title } from '@mantine/core'
 import type { ReactNode } from 'react'
 
 interface ScreenShellProps {
@@ -10,11 +11,13 @@ interface ScreenShellProps {
 export function ScreenShell({ title, action, children }: ScreenShellProps) {
   return (
     <div className="screen">
-      <header className="topbar">
-        <h1 className="topbar__title">{title}</h1>
-        {action != null && <div className="topbar__action">{action}</div>}
-      </header>
-      <main className="content">{children}</main>
+      <div className="topbar">
+        <Title order={5} lineClamp={1} style={{ flex: 1, minWidth: 0 }}>
+          {title}
+        </Title>
+        {action != null && <div>{action}</div>}
+      </div>
+      <Box className="content">{children}</Box>
     </div>
   )
 }
