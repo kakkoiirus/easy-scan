@@ -34,3 +34,17 @@ Library reactivity comes from a `useSyncExternalStore` store over the storage po
 - `npm run build` — typecheck (`tsc -b`) + production build
 - `npm run preview` — preview the production build
 - `npm run typecheck` — typecheck only
+
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs live as markdown files under `.scratch/<feature>/` (local tracker). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Five default labels (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`), recorded as a `Status:` line. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
