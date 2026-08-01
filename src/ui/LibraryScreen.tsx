@@ -1,6 +1,6 @@
 import { Button, Paper, Stack, Text, Title, UnstyledButton } from '@mantine/core'
 import { useState } from 'react'
-import { createDemoDocument, useDocuments } from '../storage/useDocuments'
+import { createSinglePageDocument, useDocuments } from '../storage/useDocuments'
 import type { Bytes } from '../types'
 import { ScreenShell } from './ScreenShell'
 
@@ -17,7 +17,11 @@ export function LibraryScreen({ onOpenCamera, onOpenDocument }: LibraryScreenPro
     setBusy(true)
     try {
       const { bytes, width, height } = await renderDemoPage()
-      await createDemoDocument(`Демо · ${new Date().toLocaleTimeString()}`, bytes, width, height)
+      await createSinglePageDocument(`Демо · ${new Date().toLocaleTimeString()}`, {
+        bytes,
+        width,
+        height,
+      })
     } finally {
       setBusy(false)
     }

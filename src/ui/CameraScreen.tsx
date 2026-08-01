@@ -2,6 +2,7 @@ import { Button, Loader, Stack, Text } from '@mantine/core'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import { cameraController, type CapturedFrame } from '../camera/camera-controller'
+import { createSinglePageDocument } from '../storage/useDocuments'
 
 interface CameraScreenProps {
   onBack: () => void
@@ -22,6 +23,7 @@ export function CameraScreen({ onBack }: CameraScreenProps) {
   )
   const [review, setReview] = useState<Review | null>(null)
   const [capturing, setCapturing] = useState(false)
+  const [saving, setSaving] = useState(false)
 
   // Permission is requested only when this screen mounts (not at app launch).
   // start/stop are generation-guarded, so navigating away mid-prompt leaks nothing.
@@ -46,6 +48,19 @@ export function CameraScreen({ onBack }: CameraScreenProps) {
       // Capture failed (e.g. stream ended) — stay in the live preview.
     } finally {
       setCapturing(false)
+    }
+  }
+
+  async function handleSave(): Promise<void> {
+    if (!review) return
+    setSaving(true)
+    try {
+      // CapturedFrame is structurally a SinglePageImage ({ bytes, width, height }).
+      await createSinglePageDocument(`Документ · ${new Date().toLocaleTimeString()}`, review.frame)
+      onBack() // unmount revokes the review URL and stops the camera (no leaks)
+    } catch {
+      // Persist failed — stay on review so the user can retry or cancel.
+      setSaving(false)
     }
   }
 
@@ -95,15 +110,26 @@ export function CameraScreen({ onBack }: CameraScreenProps) {
         </Overlay>
       )}
 
-      {/* Controls — shutter while streaming; Retake while reviewing.
+      {/* Controls — shutter while streaming; Save/Retake while reviewing.
           Cancel lives in the top bar. Hidden during starting/denied/error so the
-          status overlay is unobstructed. (Saving arrives in ticket 02.) */}
+          status overlay is unobstructed. */}
       {(reviewing || status === 'streaming') && (
         <div className="camera__controls">
           {reviewing ? (
-            <Button size="md" variant="filled" onClick={() => setReview(null)}>
-              Переснять
-            </Button>
+            <Stack align="center" gap="sm">
+              <Button size="md" loading={saving} onClick={handleSave}>
+                Сохранить
+              </Button>
+              <Button
+                variant="subtle"
+                color="gray"
+                size="xs"
+                disabled={saving}
+                onClick={() => setReview(null)}
+              >
+                Переснять
+              </Button>
+            </Stack>
           ) : (
             <button
               type="button"

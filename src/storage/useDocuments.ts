@@ -45,20 +45,26 @@ export function useDocuments(): readonly DocumentSummary[] {
 
 // --- Mutations -------------------------------------------------------------
 
+/** Source image for a single-page Document: JPEG bytes + its dimensions. */
+export interface SinglePageImage {
+  readonly bytes: Bytes
+  readonly width: number
+  readonly height: number
+}
+
 /**
- * Dev-only helper that creates a Document with a single page from the given
- * JPEG bytes. Proves the full OPFS round-trip (image write + library write +
- * reactive list) before the real capture flow exists (M1/M5). Remove later.
+ * Persist a single-page Document: writes the JPEG via `putPageImage`, then a
+ * Document with one Page whose Quad is the placeholder full-frame corners (real
+ * detection arrives at M2/M3) and `enhanceMode = 'color'`, then refreshes the
+ * reactive list. Shared by the real capture path and the dev demo button.
  */
-export async function createDemoDocument(
+export async function createSinglePageDocument(
   title: string,
-  imageBytes: Bytes,
-  width: number,
-  height: number,
+  image: SinglePageImage,
 ): Promise<void> {
   const docId = crypto.randomUUID()
   const pageId = crypto.randomUUID()
-  const file = await storage.putPageImage(docId, pageId, imageBytes)
+  const file = await storage.putPageImage(docId, pageId, image.bytes)
   const doc: Document = {
     id: docId,
     title,
@@ -67,12 +73,11 @@ export async function createDemoDocument(
       {
         id: pageId,
         file,
-        // Placeholder quad = full-image corners (real detection arrives at M2/M3).
         quad: [
           { x: 0, y: 0 },
-          { x: width, y: 0 },
-          { x: width, y: height },
-          { x: 0, y: height },
+          { x: image.width, y: 0 },
+          { x: image.width, y: image.height },
+          { x: 0, y: image.height },
         ],
         enhanceMode: 'color',
       },
