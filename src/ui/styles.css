@@ -71,3 +71,90 @@ body {
   backdrop-filter: blur(12px);
   border-top: 1px dashed var(--mantine-color-dark-5, #262b36);
 }
+
+/* Camera screen — full-bleed preview, shutter, review, status overlays. */
+.camera {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: #000;
+  overflow: hidden;
+}
+
+.camera__video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Review shows the whole captured shot (contain, not cover) so the user can
+   judge framing without it being cropped by the viewport. */
+.camera__review {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+.camera__topbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: calc(12px + env(safe-area-inset-top, 0px)) 16px 20px;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.55), transparent);
+}
+
+.camera__controls {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 28px 16px calc(28px + env(safe-area-inset-bottom, 0px));
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.55), transparent);
+}
+
+.camera__shutter {
+  width: 72px;
+  height: 72px;
+  padding: 0;
+  border: 4px solid rgba(255, 255, 255, 0.9);
+  border-radius: 50%;
+  background: radial-gradient(closest-side, #fff 0 78%, transparent 80%);
+  background-clip: padding-box;
+  cursor: pointer;
+  transition: transform 0.08s ease;
+}
+
+.camera__shutter:active {
+  transform: scale(0.92);
+}
+
+.camera__shutter:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.camera__overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.7);
+  text-align: center;
+}
