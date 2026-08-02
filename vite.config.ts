@@ -9,6 +9,10 @@ export default defineConfig({
       registerType: 'autoUpdate',
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'],
+        // The CV worker bundles OpenCV.js inline (~16 MB, embedded wasm — no
+        // separate asset, no CDN). Precache it so the scanner works offline
+        // (ADR-0001). Well above the Workbox 2 MiB default.
+        maximumFileSizeToCacheInBytes: 20 * 1024 * 1024,
       },
       manifest: {
         name: 'Easy-scan',
