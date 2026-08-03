@@ -3,12 +3,12 @@ import type { CvRequest, CvResponse } from './protocol'
 
 /**
  * Main-thread client for the CV worker. Lazily spawns a single module worker,
- * exposes `ping` (worker health), `ready` (OpenCV.js readiness), and `detect`
- * (document boundary). This is the service the UI talks to; the worker itself
- * is an implementation detail.
+ * exposes `ping` (worker health), `ready` (OpenCV.js readiness), `detect`
+ * (document boundary), and `warp` (perspective correction / flatten). This is
+ * the service the UI talks to; the worker itself is an implementation detail.
  *
- * Messages are routed by `type`; detect responses are correlated to requests
- * by `id` so overlapping detects can't be confused.
+ * Messages are routed by `type`; detect/warp responses are correlated to
+ * requests by `id` so overlapping calls can't be confused.
  */
 
 // The `ready` variant of the protocol response, without its discriminator —
@@ -20,6 +20,11 @@ export type DetectOutcome =
   | { readonly ok: true; readonly quad: Quad; readonly width: number; readonly height: number }
   | { readonly ok: false; readonly error: string }
 
+/** Result of a warp call: the flattened JPEG bytes + dims, or an error. */
+export type WarpOutcome =
+  | { readonly ok: true; readonly bytes: Bytes; readonly width: number; readonly height: number }
+  | { readonly ok: false; readonly error: string }
+
 let worker: Worker | null = null
 // Pings are answered in order (one pong per ping), so a FIFO tolerates overlap.
 const pingQueue: Array<() => void> = []
@@ -28,6 +33,8 @@ let readyResolver: ((r: ReadyPayload) => void) | null = null
 let readyPromise: Promise<{ readonly version: string | null }> | null = null
 let detectCounter = 0
 const detectWaiters = new Map<number, (outcome: DetectOutcome) => void>()
+let warpCounter = 0
+const warpWaiters = new Map<number, (outcome: WarpOutcome) => void>()
 
 function handleResponse(msg: CvResponse): void {
   switch (msg.type) {
@@ -57,6 +64,18 @@ function handleResponse(msg: CvResponse): void {
       }
       return
     }
+    case 'warp': {
+      const settle = warpWaiters.get(msg.id)
+      if (settle) {
+        warpWaiters.delete(msg.id)
+        settle(
+          msg.ok
+            ? { ok: true, bytes: msg.bytes, width: msg.width, height: msg.height }
+            : { ok: false, error: msg.error },
+        )
+      }
+      return
+    }
     default:
       return
   }
@@ -71,6 +90,8 @@ function getWorker(): Worker {
     worker.addEventListener('error', () => {
       for (const settle of detectWaiters.values()) settle({ ok: false, error: 'CV worker crashed' })
       detectWaiters.clear()
+      for (const settle of warpWaiters.values()) settle({ ok: false, error: 'CV worker crashed' })
+      warpWaiters.clear()
       for (const resolve of pingQueue) resolve()
       pingQueue.length = 0
       if (!readyResult) {
@@ -129,6 +150,22 @@ export const cvClient = {
       return new Promise<DetectOutcome>((resolve) => {
         detectWaiters.set(id, resolve)
         w.postMessage({ type: 'detect', id, bytes } satisfies CvRequest)
+      })
+    })
+  },
+
+  /**
+   * Perspective-correct ("flatten") `bytes` (a JPEG) by its boundary `quad` into
+   * a cropped rectangle. Awaits OpenCV readiness first. Returns the flattened
+   * JPEG bytes + dims, or an error outcome (e.g. a degenerate quad).
+   */
+  warp(bytes: Bytes, quad: Quad): Promise<WarpOutcome> {
+    return awaitReady().then(() => {
+      const w = getWorker()
+      const id = warpCounter++
+      return new Promise<WarpOutcome>((resolve) => {
+        warpWaiters.set(id, resolve)
+        w.postMessage({ type: 'warp', id, bytes, quad } satisfies CvRequest)
       })
     })
   },

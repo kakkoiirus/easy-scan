@@ -44,6 +44,17 @@ function toSummary(doc: Document): DocumentSummary {
   return { id: doc.id, title: doc.title, createdAt: doc.createdAt, pageCount: doc.pages.length }
 }
 
+/** Write `bytes` to `documents/<docId>/<name>` and return that OPFS path. */
+async function writePageFile(docId: string, name: string, bytes: Bytes): Promise<string> {
+  const docsDir = await (await root()).getDirectoryHandle(DOCS_DIR, { create: true })
+  const docDir = await docsDir.getDirectoryHandle(docId, { create: true })
+  const fileHandle = await docDir.getFileHandle(name, { create: true })
+  const writable = await fileHandle.createWritable()
+  await writable.write(bytes)
+  await writable.close()
+  return `${DOCS_DIR}/${docId}/${name}`
+}
+
 export const opfsStorage: Storage = {
   async listDocuments(): Promise<readonly DocumentSummary[]> {
     const docs = await readLibrary()
@@ -75,14 +86,11 @@ export const opfsStorage: Storage = {
   },
 
   async putPageImage(docId: string, pageId: string, bytes: Bytes): Promise<string> {
-    const dir = await root()
-    const docsDir = await dir.getDirectoryHandle(DOCS_DIR, { create: true })
-    const docDir = await docsDir.getDirectoryHandle(docId, { create: true })
-    const fileHandle = await docDir.getFileHandle(`${pageId}.jpg`, { create: true })
-    const writable = await fileHandle.createWritable()
-    await writable.write(bytes)
-    await writable.close()
-    return `${DOCS_DIR}/${docId}/${pageId}.jpg`
+    return writePageFile(docId, `${pageId}.jpg`, bytes)
+  },
+
+  async putPageFlat(docId: string, pageId: string, bytes: Bytes): Promise<string> {
+    return writePageFile(docId, `${pageId}.flat.jpg`, bytes)
   },
 
   async getPageImage(path: string): Promise<Blob | undefined> {

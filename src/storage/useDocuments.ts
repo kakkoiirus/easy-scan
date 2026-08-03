@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import type { Bytes, Document, DocumentSummary, Quad } from '../types'
+import type { Bytes, Document, DocumentSummary, FlatImage, Quad } from '../types'
 import { opfsStorage as storage } from './opfs-storage'
 
 /**
@@ -95,9 +95,17 @@ export async function removeDocument(id: string): Promise<void> {
   await refresh()
 }
 
-/** Pure: a new Document with one Page's boundary Quad replaced (immutable). */
+/**
+ * Pure: a new Document with one Page's boundary Quad replaced (immutable).
+ * The page's flattened result is dropped — a changed boundary makes the old
+ * flat stale, so the Document re-warps on next view. (The orphaned flat file is
+ * left in OPFS; orphan reconciliation is deferred per ADR-0003.)
+ */
 export function replacePageQuad(doc: Document, pageId: string, quad: Quad): Document {
-  return { ...doc, pages: doc.pages.map((p) => (p.id === pageId ? { ...p, quad } : p)) }
+  return {
+    ...doc,
+    pages: doc.pages.map((p) => (p.id === pageId ? { ...p, quad, flat: undefined } : p)),
+  }
 }
 
 /**
@@ -111,4 +119,36 @@ export async function updatePageQuad(docId: string, pageId: string, quad: Quad):
   if (!doc) return
   await storage.putDocument(replacePageQuad(doc, pageId, quad))
   await refresh()
+}
+
+/** Pure: a new Document with one Page's flattened result set (or cleared). */
+export function replacePageFlat(
+  doc: Document,
+  pageId: string,
+  flat: FlatImage | undefined,
+): Document {
+  return { ...doc, pages: doc.pages.map((p) => (p.id === pageId ? { ...p, flat } : p)) }
+}
+
+/**
+ * Write a Page's flattened JPEG (`putPageFlat`), attach the FlatImage to the
+ * Page, persist the Document, and return the FlatImage. The single mutation the
+ * UI calls after a warp — it keeps the OPFS write behind the storage port so the
+ * view doesn't reach into `opfsStorage` directly. Does not refresh the list (the
+ * flat doesn't change the summary; the caller holds the Document locally).
+ * Throws if the document is missing.
+ */
+export async function setPageFlat(
+  docId: string,
+  pageId: string,
+  bytes: Bytes,
+  width: number,
+  height: number,
+): Promise<FlatImage> {
+  const doc = await storage.getDocument(docId)
+  if (!doc) throw new Error(`document ${docId} not found`)
+  const file = await storage.putPageFlat(docId, pageId, bytes)
+  const flat: FlatImage = { file, width, height }
+  await storage.putDocument(replacePageFlat(doc, pageId, flat))
+  return flat
 }

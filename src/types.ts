@@ -14,6 +14,18 @@ export interface Point {
 }
 
 /**
+ * The flattened (perspective-corrected, cropped) result of warping a Page's
+ * source photo by its Quad into a clean rectangle. Stored on the Page so later
+ * milestones (enhance, export) work on the flat page without rescanning.
+ */
+export interface FlatImage {
+  /** OPFS path to the flattened JPEG, e.g. "documents/<docId>/<pageId>.flat.jpg". */
+  readonly file: string
+  readonly width: number
+  readonly height: number
+}
+
+/**
  * Quad — the four corners that mark a page's boundary on the source photo,
  * ordered top-left, top-right, bottom-right, bottom-left.
  * Used for perspective correction ("flattening"). Avoid: polygon, outline.
@@ -27,6 +39,8 @@ export interface Page {
   readonly file: string
   /** Detected/adjusted boundary on the source photo. */
   readonly quad: Quad
+  /** Flattened (perspective-corrected, cropped) result. Absent until first warp. */
+  readonly flat?: FlatImage
   readonly enhanceMode: EnhanceMode
   /** OCR text — populated in V2 (Tesseract.js). Absent in MVP. */
   readonly text?: string

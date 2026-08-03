@@ -2,6 +2,7 @@
 
 import * as opencv from '@techstark/opencv-js'
 import type { Bytes, Point, Quad } from '../types'
+import { computeFlatSize } from './flatten-geometry'
 import type { CvRequest, CvResponse } from './protocol'
 
 /**
@@ -10,7 +11,8 @@ import type { CvRequest, CvResponse } from './protocol'
  *
  * - Boots OpenCV.js on start and reports readiness (one-shot).
  * - `detect`: decode a JPEG, find the document boundary, return its Quad.
- * - Later (M3/M4): `warp` (perspective correction) and `enhance`.
+ * - `warp`: decode a JPEG + its Quad, perspective-correct into a flat rectangle.
+ * - Later: `enhance`.
  */
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope
@@ -156,6 +158,83 @@ async function detectDocument(
   }
 }
 
+/**
+ * Warp `bytes` by its boundary `quad` into a flat, cropped rectangle and encode
+ * the result as JPEG. Pure-ish: only mutates/frees the OpenCV objects it creates.
+ * Throws on a degenerate quad (or any OpenCV failure) so the caller replies with
+ * a graceful error instead of crashing the worker.
+ *
+ * The destination rectangle is sized by the Quad's edge lengths (see
+ * `computeFlatSize`); src corners TL→(0,0), TR→(w,0), BR→(w,h), BL→(0,h).
+ */
+async function warpDocument(
+  bytes: Bytes,
+  quad: Quad,
+): Promise<{ readonly bytes: Bytes; readonly width: number; readonly height: number }> {
+  const cv = cvInstance
+  if (!cv) throw new Error('OpenCV.js is not ready')
+
+  const size = computeFlatSize(quad)
+  if (!size) throw new Error('Degenerate boundary — corners are collinear or too small')
+  const { width, height } = size
+
+  // Decode with EXIF orientation so the Quad (measured against the oriented
+  // image) lines up with the pixels we warp.
+  const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/jpeg' }), {
+    imageOrientation: 'from-image',
+  })
+  const allocated: unknown[] = []
+  // Register each OpenCV object as it's allocated, so an exception in a later
+  // step still frees the earlier ones (no WASM-heap leak).
+  const track = <T>(value: T): T => {
+    allocated.push(value)
+    return value
+  }
+  try {
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height)
+    const ctx2d = canvas.getContext('2d')
+    if (!ctx2d) throw new Error('offscreen 2d context unavailable')
+    ctx2d.drawImage(bitmap, 0, 0)
+    const imageData = ctx2d.getImageData(0, 0, bitmap.width, bitmap.height)
+
+    const src = track(cv.matFromImageData(imageData))
+    const warped = track(new cv.Mat())
+    const srcTri = track(
+      cv.matFromArray(4, 1, cv.CV_32FC2, [
+        quad[0].x,
+        quad[0].y,
+        quad[1].x,
+        quad[1].y,
+        quad[2].x,
+        quad[2].y,
+        quad[3].x,
+        quad[3].y,
+      ]),
+    )
+    const dstTri = track(
+      cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, width, 0, width, height, 0, height]),
+    )
+    const matrix = track(cv.getPerspectiveTransform(srcTri, dstTri))
+    const dsize = track(new cv.Size(width, height))
+    cv.warpPerspective(src, warped, matrix, dsize)
+
+    // Encode the RGBA result to JPEG. matFromImageData is RGBA and warpPerspective
+    // preserves it, so the Mat maps straight onto an ImageData. We use the
+    // worker's OffscreenCanvas rather than cv.imencode (which @techstark/opencv-js
+    // exposes at runtime but leaves untyped).
+    const out = new OffscreenCanvas(width, height)
+    const outCtx = out.getContext('2d')
+    if (!outCtx) throw new Error('offscreen 2d context unavailable')
+    outCtx.putImageData(new ImageData(new Uint8ClampedArray(warped.data), width, height), 0, 0)
+    const blob = await out.convertToBlob({ type: 'image/jpeg', quality: 0.92 })
+    const flatBytes = new Uint8Array(await blob.arrayBuffer())
+    return { bytes: flatBytes, width, height }
+  } finally {
+    for (const value of allocated) dispose(value)
+    bitmap.close()
+  }
+}
+
 // --- readiness --------------------------------------------------------------
 
 function notifyReady(ok: boolean, version: string | null, error: string | null): void {
@@ -204,6 +283,22 @@ async function handleDetect(
   }
 }
 
+async function handleWarp(
+  msg: Extract<CvRequest, { readonly type: 'warp' }>,
+): Promise<void> {
+  try {
+    const { bytes, width, height } = await warpDocument(msg.bytes, msg.quad)
+    // Transfer the result buffer (zero-copy) — the worker is done with it.
+    ctx.postMessage(
+      { type: 'warp', id: msg.id, ok: true, bytes, width, height } satisfies CvResponse,
+      [bytes.buffer],
+    )
+  } catch (err: unknown) {
+    const error = err instanceof Error ? err.message : String(err)
+    ctx.postMessage({ type: 'warp', id: msg.id, ok: false, error: error || 'flatten failed' } satisfies CvResponse)
+  }
+}
+
 ctx.onmessage = (event: MessageEvent) => {
   const msg = event.data as CvRequest
   switch (msg.type) {
@@ -212,6 +307,9 @@ ctx.onmessage = (event: MessageEvent) => {
       break
     case 'detect':
       void handleDetect(msg)
+      break
+    case 'warp':
+      void handleWarp(msg)
       break
     default:
       // Unknown message — ignore for now.
