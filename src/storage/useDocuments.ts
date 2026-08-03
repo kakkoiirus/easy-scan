@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import type { Bytes, Document, DocumentSummary } from '../types'
+import type { Bytes, Document, DocumentSummary, Quad } from '../types'
 import { opfsStorage as storage } from './opfs-storage'
 
 /**
@@ -54,13 +54,15 @@ export interface SinglePageImage {
 
 /**
  * Persist a single-page Document: writes the JPEG via `putPageImage`, then a
- * Document with one Page whose Quad is the placeholder full-frame corners (real
- * detection arrives at M2/M3) and `enhanceMode = 'color'`, then refreshes the
- * reactive list. Shared by the real capture path and the dev demo button.
+ * Document with one Page carrying the given boundary Quad (defaulting to the
+ * full-frame placeholder) and `enhanceMode = 'color'`, then refreshes the
+ * reactive list. Shared by the real capture path (detected quad) and the dev
+ * demo button (full-frame default).
  */
 export async function createSinglePageDocument(
   title: string,
   image: SinglePageImage,
+  quad?: Quad,
 ): Promise<void> {
   const docId = crypto.randomUUID()
   const pageId = crypto.randomUUID()
@@ -73,12 +75,13 @@ export async function createSinglePageDocument(
       {
         id: pageId,
         file,
-        quad: [
-          { x: 0, y: 0 },
-          { x: image.width, y: 0 },
-          { x: image.width, y: image.height },
-          { x: 0, y: image.height },
-        ],
+        quad:
+          quad ?? [
+            { x: 0, y: 0 },
+            { x: image.width, y: 0 },
+            { x: image.width, y: image.height },
+            { x: 0, y: image.height },
+          ],
         enhanceMode: 'color',
       },
     ],

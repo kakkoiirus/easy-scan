@@ -1,39 +1,64 @@
+import type { Bytes, Quad } from '../types'
 import type { CvRequest, CvResponse } from './protocol'
 
 /**
  * Main-thread client for the CV worker. Lazily spawns a single module worker,
- * exposes `ping` (worker health) and `ready` (OpenCV.js readiness), and will
- * carry the detect/warp requests added in later tickets. This is the service
- * the UI talks to; the worker itself is an implementation detail.
+ * exposes `ping` (worker health), `ready` (OpenCV.js readiness), and `detect`
+ * (document boundary). This is the service the UI talks to; the worker itself
+ * is an implementation detail.
  *
- * Messages are routed by `type` so ping and the unsolicited ready notification
- * can't be confused for each other.
+ * Messages are routed by `type`; detect responses are correlated to requests
+ * by `id` so overlapping detects can't be confused.
  */
 
 // The `ready` variant of the protocol response, without its discriminator —
 // derived from the protocol so it stays the single source of truth.
 type ReadyPayload = Omit<Extract<CvResponse, { readonly type: 'ready' }>, 'type'>
 
+/** Result of a detect call: either a boundary Quad (in source-pixel coords) or an error. */
+export type DetectOutcome =
+  | { readonly ok: true; readonly quad: Quad; readonly width: number; readonly height: number }
+  | { readonly ok: false; readonly error: string }
+
 let worker: Worker | null = null
-// Pings are answered in order (one pong per ping), so a FIFO tolerates any
-// overlap instead of dropping an earlier caller.
+// Pings are answered in order (one pong per ping), so a FIFO tolerates overlap.
 const pingQueue: Array<() => void> = []
 let readyResult: ReadyPayload | null = null
 let readyResolver: ((r: ReadyPayload) => void) | null = null
 let readyPromise: Promise<{ readonly version: string | null }> | null = null
+let detectCounter = 0
+const detectWaiters = new Map<number, (outcome: DetectOutcome) => void>()
 
 function handleResponse(msg: CvResponse): void {
-  if (msg.type === 'pong') {
-    const resolve = pingQueue.shift()
-    if (resolve) resolve()
-    return
-  }
-  // msg.type === 'ready'
-  readyResult = { ok: msg.ok, version: msg.version, error: msg.error }
-  if (readyResolver) {
-    const resolve = readyResolver
-    readyResolver = null
-    resolve(readyResult)
+  switch (msg.type) {
+    case 'pong': {
+      const resolve = pingQueue.shift()
+      if (resolve) resolve()
+      return
+    }
+    case 'ready': {
+      readyResult = { ok: msg.ok, version: msg.version, error: msg.error }
+      if (readyResolver) {
+        const resolve = readyResolver
+        readyResolver = null
+        resolve(readyResult)
+      }
+      return
+    }
+    case 'detect': {
+      const settle = detectWaiters.get(msg.id)
+      if (settle) {
+        detectWaiters.delete(msg.id)
+        settle(
+          msg.ok
+            ? { ok: true, quad: msg.quad, width: msg.width, height: msg.height }
+            : { ok: false, error: msg.error },
+        )
+      }
+      return
+    }
+    default:
+      return
   }
 }
 
@@ -41,8 +66,43 @@ function getWorker(): Worker {
   if (!worker) {
     worker = new Worker(new URL('./cv.worker.ts', import.meta.url), { type: 'module' })
     worker.addEventListener('message', (e: MessageEvent<CvResponse>) => handleResponse(e.data))
+    // If the worker crashes or fails to load, fail in-flight callers instead of
+    // hanging forever (the message listener will never fire).
+    worker.addEventListener('error', () => {
+      for (const settle of detectWaiters.values()) settle({ ok: false, error: 'CV worker crashed' })
+      detectWaiters.clear()
+      for (const resolve of pingQueue) resolve()
+      pingQueue.length = 0
+      if (!readyResult) {
+        readyResult = { ok: false, version: null, error: 'CV worker crashed' }
+        if (readyResolver) {
+          const resolve = readyResolver
+          readyResolver = null
+          resolve(readyResult)
+        }
+      }
+    })
   }
   return worker
+}
+
+/** Resolves once OpenCV.js has initialised in the worker (cached); rejects on failure. */
+function awaitReady(): Promise<{ readonly version: string | null }> {
+  if (!readyPromise) {
+    getWorker() // spawn the worker so it starts loading and can notify us
+    readyPromise = new Promise<{ readonly version: string | null }>((resolve, reject) => {
+      const settle = (r: ReadyPayload): void => {
+        if (r.ok) resolve({ version: r.version })
+        else reject(new Error(r.error ?? 'OpenCV.js failed to load'))
+      }
+      if (readyResult) {
+        settle(readyResult)
+        return
+      }
+      readyResolver = settle
+    })
+  }
+  return readyPromise
 }
 
 export const cvClient = {
@@ -55,26 +115,21 @@ export const cvClient = {
     })
   },
 
+  /** Resolves once OpenCV.js has initialised in the worker; rejects on failure. */
+  ready: awaitReady,
+
   /**
-   * Resolves once OpenCV.js has initialised in the worker. Safe to call
-   * repeatedly — the result is cached. Detect/warp callers should await this
-   * before issuing CV work. Rejects if OpenCV failed to load.
+   * Detect the document boundary in `bytes` (a JPEG). Awaits OpenCV readiness
+   * first. Returns the Quad in source-pixel coords, or an error outcome.
    */
-  ready(): Promise<{ readonly version: string | null }> {
-    if (!readyPromise) {
-      getWorker() // spawn the worker so it starts loading and can notify us
-      readyPromise = new Promise<{ readonly version: string | null }>((resolve, reject) => {
-        const settle = (r: ReadyPayload): void => {
-          if (r.ok) resolve({ version: r.version })
-          else reject(new Error(r.error ?? 'OpenCV.js failed to load'))
-        }
-        if (readyResult) {
-          settle(readyResult)
-          return
-        }
-        readyResolver = settle
+  detect(bytes: Bytes): Promise<DetectOutcome> {
+    return awaitReady().then(() => {
+      const w = getWorker()
+      const id = detectCounter++
+      return new Promise<DetectOutcome>((resolve) => {
+        detectWaiters.set(id, resolve)
+        w.postMessage({ type: 'detect', id, bytes } satisfies CvRequest)
       })
-    }
-    return readyPromise
+    })
   },
 }

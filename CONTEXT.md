@@ -11,3 +11,7 @@ _Avoid_: scan (as a noun), file, item
 **Page**:
 A single captured sheet within a Document. Each Page keeps its source photo and the detected boundary so it can be re-adjusted or re-exported, plus the enhanced result.
 _Avoid_: image, sheet, picture, scan (as a noun)
+
+**Quad**:
+The four corners that mark a Page's boundary on its source photo — ordered top-left, top-right, bottom-right, bottom-left — in source-pixel coordinates. Used to crop and perspective-correct ("flatten") the page.
+_Avoid_: polygon, outline, contour, bounding box

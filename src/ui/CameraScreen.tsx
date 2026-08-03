@@ -2,16 +2,21 @@ import { Button, Loader, Stack, Text } from '@mantine/core'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import { cameraController, type CapturedFrame } from '../camera/camera-controller'
+import { cvClient } from '../worker/cv-client'
 import { createSinglePageDocument } from '../storage/useDocuments'
+import type { Point, Quad } from '../types'
 
 interface CameraScreenProps {
   onBack: () => void
 }
 
-/** A captured frame plus its object URL for the review overlay. */
+/** A captured frame, its object URL, and its detected boundary.
+ *  `quad` is null while detecting or if detection found nothing usable. */
 interface Review {
   readonly url: string
   readonly frame: CapturedFrame
+  readonly quad: Quad | null
+  readonly detecting: boolean
 }
 
 export function CameraScreen({ onBack }: CameraScreenProps) {
@@ -25,25 +30,36 @@ export function CameraScreen({ onBack }: CameraScreenProps) {
   const [capturing, setCapturing] = useState(false)
   const [saving, setSaving] = useState(false)
 
-  // Permission is requested only when this screen mounts (not at app launch).
-  // start/stop are generation-guarded, so navigating away mid-prompt leaks nothing.
+  // Permission requested only on mount; start/stop are generation-guarded (no leaks).
   useEffect(() => {
     if (videoRef.current) void cameraController.start(videoRef.current)
     return () => cameraController.stop()
   }, [])
 
-  // Revoke the review object URL when it changes or on unmount — no leaks.
+  // Revoke the review object URL when it changes or on unmount. Keyed on the URL
+  // so updating only the quad (same URL) doesn't revoke the still-displayed image.
   useEffect(() => {
-    if (!review) return
-    return () => URL.revokeObjectURL(review.url)
-  }, [review])
+    const url = review?.url
+    if (!url) return
+    return () => URL.revokeObjectURL(url)
+  }, [review?.url])
 
   async function handleShutter(): Promise<void> {
     setCapturing(true)
     try {
       const frame = await cameraController.capture()
       const url = URL.createObjectURL(new Blob([frame.bytes], { type: 'image/jpeg' }))
-      setReview({ url, frame })
+      setReview({ url, frame, quad: null, detecting: true })
+      // Detect the boundary in the worker. On error, leave quad null — Save then
+      // stores the full-frame placeholder quad.
+      let quad: Quad | null = null
+      try {
+        const result = await cvClient.detect(frame.bytes)
+        quad = result.ok ? result.quad : null
+      } catch {
+        quad = null
+      }
+      setReview((r) => (r && r.url === url ? { ...r, quad, detecting: false } : r))
     } catch {
       // Capture failed (e.g. stream ended) — stay in the live preview.
     } finally {
@@ -55,8 +71,11 @@ export function CameraScreen({ onBack }: CameraScreenProps) {
     if (!review) return
     setSaving(true)
     try {
-      // CapturedFrame is structurally a SinglePageImage ({ bytes, width, height }).
-      await createSinglePageDocument(`Документ · ${new Date().toLocaleTimeString()}`, review.frame)
+      await createSinglePageDocument(
+        `Документ · ${new Date().toLocaleTimeString()}`,
+        review.frame,
+        review.quad ?? undefined,
+      )
       onBack() // unmount revokes the review URL and stops the camera (no leaks)
     } catch {
       // Persist failed — stay on review so the user can retry or cancel.
@@ -65,14 +84,32 @@ export function CameraScreen({ onBack }: CameraScreenProps) {
   }
 
   const reviewing = review !== null
+  const detecting = review?.detecting ?? false
 
   return (
     <div className="camera">
       {/* Always mounted so Retake returns to a live preview instantly (no restart). */}
       <video ref={videoRef} className="camera__video" autoPlay muted playsInline />
 
-      {/* The captured photo, layered over the still-running preview. */}
-      {review && <img src={review.url} className="camera__review" alt="Снимок" />}
+      {review && (
+        // One SVG whose viewBox is the image's pixels: photo + quad share the same
+        // user space, so the overlay aligns with no measuring.
+        <svg
+          className="camera__review"
+          viewBox={`0 0 ${review.frame.width} ${review.frame.height}`}
+          preserveAspectRatio="xMidYMid meet"
+        >
+          <image href={review.url} x={0} y={0} width={review.frame.width} height={review.frame.height} />
+          {review.quad && <QuadOverlay quad={review.quad} span={review.frame} />}
+        </svg>
+      )}
+
+      {detecting && (
+        <div className="camera__detecting">
+          <Loader size="sm" />
+          <Text size="xs">Определение границ…</Text>
+        </div>
+      )}
 
       <div className="camera__topbar">
         <Button variant="light" size="xs" color="gray" onClick={onBack}>
@@ -110,14 +147,12 @@ export function CameraScreen({ onBack }: CameraScreenProps) {
         </Overlay>
       )}
 
-      {/* Controls — shutter while streaming; Save/Retake while reviewing.
-          Cancel lives in the top bar. Hidden during starting/denied/error so the
-          status overlay is unobstructed. */}
+      {/* Controls — shutter while streaming; Save/Retake while reviewing. */}
       {(reviewing || status === 'streaming') && (
         <div className="camera__controls">
           {reviewing ? (
             <Stack align="center" gap="sm">
-              <Button size="md" loading={saving} onClick={handleSave}>
+              <Button size="md" loading={saving} disabled={detecting} onClick={handleSave}>
                 Сохранить
               </Button>
               <Button
@@ -142,6 +177,26 @@ export function CameraScreen({ onBack }: CameraScreenProps) {
         </div>
       )}
     </div>
+  )
+}
+
+/** Draws the detected boundary: a translucent fill, an outline, and four corner dots. */
+function QuadOverlay({
+  quad,
+  span,
+}: {
+  readonly quad: Quad
+  readonly span: { readonly width: number; readonly height: number }
+}) {
+  const points = quad.map((p) => `${p.x},${p.y}`).join(' ')
+  const r = Math.max(span.width, span.height) * 0.012
+  return (
+    <g>
+      <polygon points={points} className="camera__quad-shape" />
+      {quad.map((p: Point, i) => (
+        <circle key={i} cx={p.x} cy={p.y} r={r} className="camera__quad-dot" />
+      ))}
+    </g>
   )
 }
 
