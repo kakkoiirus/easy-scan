@@ -1,14 +1,15 @@
-import type { Bytes, Quad } from '../types'
+import type { Bytes, EnhanceMode, Quad } from '../types'
 import type { CvRequest, CvResponse } from './protocol'
 
 /**
  * Main-thread client for the CV worker. Lazily spawns a single module worker,
  * exposes `ping` (worker health), `ready` (OpenCV.js readiness), `detect`
- * (document boundary), and `warp` (perspective correction / flatten). This is
- * the service the UI talks to; the worker itself is an implementation detail.
+ * (document boundary), `warp` (perspective correction / flatten), and `enhance`
+ * (tonal enhancement of a flat image). This is the service the UI talks to; the
+ * worker itself is an implementation detail.
  *
- * Messages are routed by `type`; detect/warp responses are correlated to
- * requests by `id` so overlapping calls can't be confused.
+ * Messages are routed by `type`; detect/warp/enhance responses are correlated
+ * to requests by `id` so overlapping calls can't be confused.
  */
 
 // The `ready` variant of the protocol response, without its discriminator —
@@ -25,6 +26,11 @@ export type WarpOutcome =
   | { readonly ok: true; readonly bytes: Bytes; readonly width: number; readonly height: number }
   | { readonly ok: false; readonly error: string }
 
+/** Result of an enhance call: the enhanced JPEG bytes + dims, or an error. */
+export type EnhanceOutcome =
+  | { readonly ok: true; readonly bytes: Bytes; readonly width: number; readonly height: number }
+  | { readonly ok: false; readonly error: string }
+
 let worker: Worker | null = null
 // Pings are answered in order (one pong per ping), so a FIFO tolerates overlap.
 const pingQueue: Array<() => void> = []
@@ -35,6 +41,8 @@ let detectCounter = 0
 const detectWaiters = new Map<number, (outcome: DetectOutcome) => void>()
 let warpCounter = 0
 const warpWaiters = new Map<number, (outcome: WarpOutcome) => void>()
+let enhanceCounter = 0
+const enhanceWaiters = new Map<number, (outcome: EnhanceOutcome) => void>()
 
 function handleResponse(msg: CvResponse): void {
   switch (msg.type) {
@@ -76,6 +84,18 @@ function handleResponse(msg: CvResponse): void {
       }
       return
     }
+    case 'enhance': {
+      const settle = enhanceWaiters.get(msg.id)
+      if (settle) {
+        enhanceWaiters.delete(msg.id)
+        settle(
+          msg.ok
+            ? { ok: true, bytes: msg.bytes, width: msg.width, height: msg.height }
+            : { ok: false, error: msg.error },
+        )
+      }
+      return
+    }
     default:
       return
   }
@@ -92,6 +112,8 @@ function getWorker(): Worker {
       detectWaiters.clear()
       for (const settle of warpWaiters.values()) settle({ ok: false, error: 'CV worker crashed' })
       warpWaiters.clear()
+      for (const settle of enhanceWaiters.values()) settle({ ok: false, error: 'CV worker crashed' })
+      enhanceWaiters.clear()
       for (const resolve of pingQueue) resolve()
       pingQueue.length = 0
       if (!readyResult) {
@@ -166,6 +188,22 @@ export const cvClient = {
       return new Promise<WarpOutcome>((resolve) => {
         warpWaiters.set(id, resolve)
         w.postMessage({ type: 'warp', id, bytes, quad } satisfies CvRequest)
+      })
+    })
+  },
+
+  /**
+   * Enhance a flat image `bytes` (a JPEG) by its `mode` — the "clean scan" tonal
+   * pass. Awaits OpenCV readiness first. Returns the enhanced JPEG bytes + dims,
+   * or an error outcome. The input is a flat (synthetic), so no orientation pass.
+   */
+  enhance(bytes: Bytes, mode: EnhanceMode): Promise<EnhanceOutcome> {
+    return awaitReady().then(() => {
+      const w = getWorker()
+      const id = enhanceCounter++
+      return new Promise<EnhanceOutcome>((resolve) => {
+        enhanceWaiters.set(id, resolve)
+        w.postMessage({ type: 'enhance', id, bytes, mode } satisfies CvRequest)
       })
     })
   },

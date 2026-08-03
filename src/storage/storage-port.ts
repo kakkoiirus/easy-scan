@@ -21,6 +21,8 @@ export type Storage = {
   readonly putPageImage: (docId: string, pageId: string, bytes: Bytes) => Promise<string>
   /** Persist a page's flattened JPEG bytes; returns its OPFS path. */
   readonly putPageFlat: (docId: string, pageId: string, bytes: Bytes) => Promise<string>
+  /** Persist a page's enhanced JPEG bytes; returns its OPFS path. */
+  readonly putPageEnhanced: (docId: string, pageId: string, bytes: Bytes) => Promise<string>
   /** Read a page image as a Blob by path, or undefined if missing. */
   readonly getPageImage: (path: string) => Promise<Blob | undefined>
 }

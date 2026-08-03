@@ -26,6 +26,20 @@ export interface FlatImage {
 }
 
 /**
+ * The enhanced result of applying a Page's `enhanceMode` to its flat image —
+ * the "clean scan" look. Same shape as the flat result. Stored on the Page so
+ * the view (and later export) consume it without recomputing. Absent until the
+ * first enhance; derived from the flat, so it is invalidated whenever the flat
+ * is regenerated (a corner edit) or the mode changes.
+ */
+export interface EnhancedImage {
+  /** OPFS path to the enhanced JPEG, e.g. "documents/<docId>/<pageId>.enh.jpg". */
+  readonly file: string
+  readonly width: number
+  readonly height: number
+}
+
+/**
  * Quad — the four corners that mark a page's boundary on the source photo,
  * ordered top-left, top-right, bottom-right, bottom-left.
  * Used for perspective correction ("flattening"). Avoid: polygon, outline.
@@ -42,6 +56,11 @@ export interface Page {
   /** Flattened (perspective-corrected, cropped) result. Absent until first warp. */
   readonly flat?: FlatImage
   readonly enhanceMode: EnhanceMode
+  /**
+   * Enhanced result of applying `enhanceMode` to the flat image. Absent until
+   * first enhance; cleared when the flat is regenerated or the mode changes.
+   */
+  readonly enhanced?: EnhancedImage
   /** OCR text — populated in V2 (Tesseract.js). Absent in MVP. */
   readonly text?: string
 }

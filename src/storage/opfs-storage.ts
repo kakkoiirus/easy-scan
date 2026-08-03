@@ -93,6 +93,10 @@ export const opfsStorage: Storage = {
     return writePageFile(docId, `${pageId}.flat.jpg`, bytes)
   },
 
+  async putPageEnhanced(docId: string, pageId: string, bytes: Bytes): Promise<string> {
+    return writePageFile(docId, `${pageId}.enh.jpg`, bytes)
+  },
+
   async getPageImage(path: string): Promise<Blob | undefined> {
     try {
       const parts = path.split('/')

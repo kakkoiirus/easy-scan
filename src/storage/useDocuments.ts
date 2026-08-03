@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import type { Bytes, Document, DocumentSummary, FlatImage, Quad } from '../types'
+import type { Bytes, Document, DocumentSummary, EnhancedImage, FlatImage, Quad } from '../types'
 import { opfsStorage as storage } from './opfs-storage'
 
 /**
@@ -97,14 +97,17 @@ export async function removeDocument(id: string): Promise<void> {
 
 /**
  * Pure: a new Document with one Page's boundary Quad replaced (immutable).
- * The page's flattened result is dropped — a changed boundary makes the old
- * flat stale, so the Document re-warps on next view. (The orphaned flat file is
- * left in OPFS; orphan reconciliation is deferred per ADR-0003.)
+ * The page's flattened AND enhanced results are dropped — a changed boundary
+ * makes the old flat (and its derived enhanced image) stale, so the Document
+ * re-warps and re-enhances on next view. (The orphaned files are left in OPFS;
+ * orphan reconciliation is deferred per ADR-0003.)
  */
 export function replacePageQuad(doc: Document, pageId: string, quad: Quad): Document {
   return {
     ...doc,
-    pages: doc.pages.map((p) => (p.id === pageId ? { ...p, quad, flat: undefined } : p)),
+    pages: doc.pages.map((p) =>
+      p.id === pageId ? { ...p, quad, flat: undefined, enhanced: undefined } : p,
+    ),
   }
 }
 
@@ -151,4 +154,35 @@ export async function setPageFlat(
   const flat: FlatImage = { file, width, height }
   await storage.putDocument(replacePageFlat(doc, pageId, flat))
   return flat
+}
+
+/** Pure: a new Document with one Page's enhanced result set (or cleared). */
+export function replacePageEnhanced(
+  doc: Document,
+  pageId: string,
+  enhanced: EnhancedImage | undefined,
+): Document {
+  return { ...doc, pages: doc.pages.map((p) => (p.id === pageId ? { ...p, enhanced } : p)) }
+}
+
+/**
+ * Write a Page's enhanced JPEG (`putPageEnhanced`), attach the EnhancedImage to
+ * the Page, persist the Document, and return the EnhancedImage. Mirrors
+ * `setPageFlat`: the single mutation the UI calls after an enhance. Does not
+ * refresh the list (the enhanced image doesn't change the summary; the caller
+ * holds the Document locally). Throws if the document is missing.
+ */
+export async function setPageEnhanced(
+  docId: string,
+  pageId: string,
+  bytes: Bytes,
+  width: number,
+  height: number,
+): Promise<EnhancedImage> {
+  const doc = await storage.getDocument(docId)
+  if (!doc) throw new Error(`document ${docId} not found`)
+  const file = await storage.putPageEnhanced(docId, pageId, bytes)
+  const enhanced: EnhancedImage = { file, width, height }
+  await storage.putDocument(replacePageEnhanced(doc, pageId, enhanced))
+  return enhanced
 }
