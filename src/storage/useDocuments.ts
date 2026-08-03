@@ -6,6 +6,7 @@ import type {
   EnhancedImage,
   EnhanceMode,
   FlatImage,
+  Page,
   Quad,
 } from '../types'
 import { opfsStorage as storage } from './opfs-storage'
@@ -60,42 +61,70 @@ export interface SinglePageImage {
   readonly height: number
 }
 
+/** Pure: a new Document with the page appended to the end of its page list. */
+export function appendPageToDocument(doc: Document, page: Page): Document {
+  return { ...doc, pages: [...doc.pages, page] }
+}
+
 /**
- * Persist a single-page Document: writes the JPEG via `putPageImage`, then a
- * Document with one Page carrying the given boundary Quad (defaulting to the
- * full-frame placeholder) and `enhanceMode = 'color'`, then refreshes the
- * reactive list. Shared by the real capture path (detected quad) and the dev
- * demo button (full-frame default).
+ * Persist a new empty Document (no pages) and return its id. The capture
+ * session calls this once, then `appendPage` per captured page at "Готово".
+ * Does not refresh the reactive list — the batch only becomes visible once its
+ * pages are appended, so nothing appears in the library until the session is
+ * saved.
+ */
+export async function createDocument(title: string): Promise<string> {
+  const docId = crypto.randomUUID()
+  const doc: Document = { id: docId, title, createdAt: Date.now(), pages: [] }
+  await storage.putDocument(doc)
+  return docId
+}
+
+/**
+ * Write a page's source JPEG via the storage port and append a Page (full-frame
+ * placeholder Quad when none given, `enhanceMode = 'color'`, no flat/enhanced
+ * yet), persist the Document, and refresh the reactive list. The persisted
+ * counterpart of `appendPageToDocument`; the capture session calls this once per
+ * captured page. Throws if the document is missing.
+ */
+export async function appendPage(
+  docId: string,
+  image: SinglePageImage,
+  quad?: Quad,
+): Promise<void> {
+  const doc = await storage.getDocument(docId)
+  if (!doc) throw new Error(`document ${docId} not found`)
+  const pageId = crypto.randomUUID()
+  const file = await storage.putPageImage(docId, pageId, image.bytes)
+  const page: Page = {
+    id: pageId,
+    file,
+    quad:
+      quad ?? [
+        { x: 0, y: 0 },
+        { x: image.width, y: 0 },
+        { x: image.width, y: image.height },
+        { x: 0, y: image.height },
+      ],
+    enhanceMode: 'color',
+  }
+  await storage.putDocument(appendPageToDocument(doc, page))
+  await refresh()
+}
+
+/**
+ * Persist a single-page Document — a thin `createDocument` + `appendPage`. The
+ * single-capture path (one page then "Готово") and the dev demo button both
+ * reuse the same creation path as a multi-page session; they just stop after one
+ * page.
  */
 export async function createSinglePageDocument(
   title: string,
   image: SinglePageImage,
   quad?: Quad,
 ): Promise<void> {
-  const docId = crypto.randomUUID()
-  const pageId = crypto.randomUUID()
-  const file = await storage.putPageImage(docId, pageId, image.bytes)
-  const doc: Document = {
-    id: docId,
-    title,
-    createdAt: Date.now(),
-    pages: [
-      {
-        id: pageId,
-        file,
-        quad:
-          quad ?? [
-            { x: 0, y: 0 },
-            { x: image.width, y: 0 },
-            { x: image.width, y: image.height },
-            { x: 0, y: image.height },
-          ],
-        enhanceMode: 'color',
-      },
-    ],
-  }
-  await storage.putDocument(doc)
-  await refresh()
+  const docId = await createDocument(title)
+  await appendPage(docId, image, quad)
 }
 
 export async function removeDocument(id: string): Promise<void> {

@@ -200,6 +200,7 @@ body {
   z-index: 5;
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
   padding: calc(12px + env(safe-area-inset-top, 0px)) 16px 20px;
   background: linear-gradient(to bottom, rgba(0, 0, 0, 0.55), transparent);
@@ -210,6 +211,17 @@ body {
 
 .camera__topbar button {
   pointer-events: auto;
+}
+
+/* Captured-pages counter — a centered pill at the top, shown mid-session.
+   Display-only (pointer-events: none) so it never eats a corner drag. */
+.camera__counter {
+  position: absolute;
+  top: calc(18px + env(safe-area-inset-top, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  pointer-events: none;
 }
 
 .camera__controls {
