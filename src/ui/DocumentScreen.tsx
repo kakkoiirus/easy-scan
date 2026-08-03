@@ -1,18 +1,20 @@
-import { Box, Button, Image, Loader, LoadingOverlay, Stack, Text } from '@mantine/core'
+import { Box, Button, Image, Loader, LoadingOverlay, SegmentedControl, Stack, Text } from '@mantine/core'
 import { useEffect, useRef, useState } from 'react'
 import { CornerEditorView, type CornerEditorHandle } from '../corner-editor/CornerEditorView'
 import { useImageSize } from '../corner-editor/useImageSize'
 import { opfsStorage } from '../storage/opfs-storage'
 import {
   removeDocument,
+  replacePageEnhanceMode,
   replacePageEnhanced,
   replacePageFlat,
   replacePageQuad,
   setPageEnhanced,
   setPageFlat,
+  updatePageEnhanceMode,
   updatePageQuad,
 } from '../storage/useDocuments'
-import type { Bytes, Document } from '../types'
+import type { Bytes, Document, EnhanceMode } from '../types'
 import { cvClient } from '../worker/cv-client'
 import { ScreenShell } from './ScreenShell'
 
@@ -233,6 +235,24 @@ export function DocumentScreen({ docId, onBack }: DocumentScreenProps) {
     }
   }
 
+  /**
+   * Switch the page's enhance mode. Optimistic: the control snaps to the new
+   * mode and clears the cached enhanced image so the enhance effect re-runs off
+   * the flat with the new look; the persist follows, and rolls back on failure
+   * so the control never shows a mode that isn't actually stored.
+   */
+  async function handleChangeEnhanceMode(mode: EnhanceMode): Promise<void> {
+    const page = firstPage
+    if (!doc || !page || page.enhanceMode === mode) return
+    const prev = page.enhanceMode
+    setDoc((d) => (d ? replacePageEnhanceMode(d, page.id, mode) : d))
+    try {
+      await updatePageEnhanceMode(doc.id, page.id, mode)
+    } catch {
+      setDoc((d) => (d ? replacePageEnhanceMode(d, page.id, prev) : d))
+    }
+  }
+
   // Full-screen boundary editor overlay. Shown only once the source photo and
   // its dimensions are loaded. Disabled while a warp runs so the boundary can't
   // change under an in-flight flatten.
@@ -271,6 +291,24 @@ export function DocumentScreen({ docId, onBack }: DocumentScreenProps) {
       }
     >
       <Stack gap="md" align="stretch">
+        {doc && firstPage && (
+          <Stack gap="xs">
+            <Text size="sm" fw={500}>
+              Вид
+            </Text>
+            <SegmentedControl
+              value={firstPage.enhanceMode}
+              onChange={(value) => void handleChangeEnhanceMode(value as EnhanceMode)}
+              data={[
+                { value: 'color', label: 'Цвет' },
+                { value: 'grayscale', label: 'Серый' },
+                { value: 'bw', label: 'Ч/Б' },
+              ]}
+              disabled={!firstPage.flat || warping}
+              fullWidth
+            />
+          </Stack>
+        )}
         {enhancedUrl ? (
           <Image src={enhancedUrl} alt={doc?.title} radius="md" bg="white" />
         ) : flatUrl ? (

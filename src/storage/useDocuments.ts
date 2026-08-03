@@ -1,5 +1,13 @@
 import { useSyncExternalStore } from 'react'
-import type { Bytes, Document, DocumentSummary, EnhancedImage, FlatImage, Quad } from '../types'
+import type {
+  Bytes,
+  Document,
+  DocumentSummary,
+  EnhancedImage,
+  EnhanceMode,
+  FlatImage,
+  Quad,
+} from '../types'
 import { opfsStorage as storage } from './opfs-storage'
 
 /**
@@ -121,6 +129,37 @@ export async function updatePageQuad(docId: string, pageId: string, quad: Quad):
   const doc = await storage.getDocument(docId)
   if (!doc) return
   await storage.putDocument(replacePageQuad(doc, pageId, quad))
+  await refresh()
+}
+
+/**
+ * Pure: a new Document with one Page's enhance mode set and its cached enhanced
+ * image dropped. The enhanced view is derived from the flat, so a new mode
+ * invalidates it; the Document re-enhances off the existing flat on next view.
+ * The flat itself is untouched — the mode is independent of the geometry.
+ */
+export function replacePageEnhanceMode(doc: Document, pageId: string, mode: EnhanceMode): Document {
+  return {
+    ...doc,
+    pages: doc.pages.map((p) => (p.id === pageId ? { ...p, enhanceMode: mode, enhanced: undefined } : p)),
+  }
+}
+
+/**
+ * Persist a Page's `enhanceMode` and drop its now-stale enhanced image, so the
+ * Document re-enhances off the existing flat with the new look on next view.
+ * Mirrors `updatePageQuad` (a persisted field change that invalidates a derived
+ * result) but leaves the flat in place. Refreshes the list for consistency with
+ * `updatePageQuad`; the mode itself doesn't change the summary.
+ */
+export async function updatePageEnhanceMode(
+  docId: string,
+  pageId: string,
+  mode: EnhanceMode,
+): Promise<void> {
+  const doc = await storage.getDocument(docId)
+  if (!doc) return
+  await storage.putDocument(replacePageEnhanceMode(doc, pageId, mode))
   await refresh()
 }
 

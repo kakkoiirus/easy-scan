@@ -314,6 +314,101 @@ function enhanceColor(cv: CvNamespace, imageData: ImageData): EnhancedPixels {
   }
 }
 
+/** Smallest odd integer in [3, 75] near `target` — adaptiveThreshold needs an odd block size > 1. */
+function oddBlockSize(target: number): number {
+  const clamped = Math.min(75, Math.max(3, Math.round(target)))
+  return clamped % 2 === 0 ? clamped + 1 : clamped
+}
+
+/**
+ * Broadcast a single-channel (CV_8UC1) buffer to RGBA with opaque alpha — the
+ * shared output step for the grayscale and B&W enhancers, which both settle on a
+ * one-channel result. Pure: allocates a fresh buffer, touches nothing else.
+ */
+function broadcastGrayToRgba(
+  gray: Uint8Array,
+  width: number,
+  height: number,
+): Uint8ClampedArray<ArrayBuffer> {
+  const rgba = new Uint8ClampedArray(width * height * 4)
+  for (let i = 0, j = 0; i < rgba.length; i += 4, j += 1) {
+    const v = gray[j]
+    rgba[i] = v
+    rgba[i + 1] = v
+    rgba[i + 2] = v
+    rgba[i + 3] = 255
+  }
+  return rgba
+}
+
+/**
+ * Grayscale enhancement: desaturate the flat image and stretch its luminance
+ * contrast for a clean, legible gray scan. Pure-ish: only mutates/frees the
+ * OpenCV objects it creates. Mirrors the color pass's contrast approach
+ * (`equalizeHist` when the build exposes it, else a fixed-gain fallback).
+ */
+function enhanceGrayscale(cv: CvNamespace, imageData: ImageData): EnhancedPixels {
+  const width = imageData.width
+  const height = imageData.height
+  const allocated: unknown[] = []
+  const track = <T>(value: T): T => {
+    allocated.push(value)
+    return value
+  }
+  try {
+    const src = track(cv.matFromImageData(imageData))
+    const gray = track(new cv.Mat())
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY)
+    const out = track(new cv.Mat())
+    if (typeof cv.equalizeHist === 'function') {
+      cv.equalizeHist(gray, out)
+    } else {
+      cv.convertScaleAbs(gray, out, 1.2, 0)
+    }
+    // out is CV_8UC1; broadcast the single channel to RGBA with opaque alpha.
+    return { width, height, data: broadcastGrayToRgba(out.data, width, height) }
+  } finally {
+    for (const value of allocated) dispose(value)
+  }
+}
+
+/**
+ * B&W enhancement: adaptive (local) threshold for the crisp, thresholded
+ * "scanned document" look that stays robust to uneven lighting. Pure-ish: only
+ * mutates/frees the OpenCV objects it creates. The block size scales with the
+ * image (≈ 1/30 of the shorter side) so it suits both small and large flats; a
+ * positive C trims each local mean so dark text reliably drops below threshold.
+ */
+function enhanceBw(cv: CvNamespace, imageData: ImageData): EnhancedPixels {
+  const width = imageData.width
+  const height = imageData.height
+  const allocated: unknown[] = []
+  const track = <T>(value: T): T => {
+    allocated.push(value)
+    return value
+  }
+  try {
+    const src = track(cv.matFromImageData(imageData))
+    const gray = track(new cv.Mat())
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY)
+    const bw = track(new cv.Mat())
+    const blockSize = oddBlockSize(Math.min(width, height) / 30)
+    cv.adaptiveThreshold(
+      gray,
+      bw,
+      255,
+      cv.ADAPTIVE_THRESH_GAUSSIAN_C,
+      cv.THRESH_BINARY,
+      blockSize,
+      10,
+    )
+    // bw is CV_8UC1; broadcast the single channel to RGBA with opaque alpha.
+    return { width, height, data: broadcastGrayToRgba(bw.data, width, height) }
+  } finally {
+    for (const value of allocated) dispose(value)
+  }
+}
+
 /**
  * Enhance the flat image `bytes` by its `mode` and encode the result as JPEG.
  * The input is the flat (a synthetic warp output), so there are no EXIF /
@@ -341,9 +436,14 @@ async function enhanceDocument(
       case 'color':
         pixels = enhanceColor(cv, imageData)
         break
+      case 'grayscale':
+        pixels = enhanceGrayscale(cv, imageData)
+        break
+      case 'bw':
+        pixels = enhanceBw(cv, imageData)
+        break
       default:
-        // grayscale / bw land in the next ticket; fail gracefully until then.
-        throw new Error(`enhance mode "${mode}" is not supported yet`)
+        throw new Error(`enhance mode "${mode}" is not supported`)
     }
 
     const out = new OffscreenCanvas(pixels.width, pixels.height)
