@@ -102,7 +102,35 @@ body {
   background: #000;
 }
 
-.camera__quad-shape {
+/* Corner editor — the shared page/boundary editor surface. One SVG in
+   image-pixel user space; the imperative controller owns pointer dragging off
+   React's render path, so touch-action: none is required to stop the browser
+   from scrolling/zooming mid-drag. */
+.corner-editor__svg {
+  display: block;
+  touch-action: none;
+  cursor: grab;
+  /* Stop the browser from native-dragging the photo on mouse, which would
+     hijack the pointer away from our drag handler. */
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
+.corner-editor__svg image {
+  -webkit-user-drag: none;
+}
+
+.corner-editor__svg:active {
+  cursor: grabbing;
+}
+
+/* Hit-testing is geometric (on the svg), so the overlay never eats events. */
+.corner-editor__shape,
+.corner-editor__dot {
+  pointer-events: none;
+}
+
+.corner-editor__shape {
   fill: rgba(79, 157, 255, 0.18);
   stroke: #4f9dff;
   stroke-width: 3;
@@ -110,11 +138,42 @@ body {
   vector-effect: non-scaling-stroke;
 }
 
-.camera__quad-dot {
+.corner-editor__dot {
   fill: #4f9dff;
   stroke: #fff;
   stroke-width: 2;
   vector-effect: non-scaling-stroke;
+}
+
+/* Full-screen boundary editor (opened from a saved Page). Pinned to the app's
+   480px frame so it overlays exactly the document column. */
+.boundary-editor {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  max-width: 480px;
+  margin: 0 auto;
+  z-index: 20;
+  background: #000;
+  display: flex;
+  flex-direction: column;
+}
+
+.boundary-editor__svg {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+
+.boundary-editor__controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px 12px calc(16px + env(safe-area-inset-bottom, 0px));
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.6), transparent);
 }
 
 /* "Detecting…" pill — non-blocking; the photo stays visible behind it. */
@@ -144,6 +203,13 @@ body {
   gap: 12px;
   padding: calc(12px + env(safe-area-inset-top, 0px)) 16px 20px;
   background: linear-gradient(to bottom, rgba(0, 0, 0, 0.55), transparent);
+  /* Overlay the editor svg but let drags pass through to a corner beneath the
+     gradient; only the buttons re-enable themselves. */
+  pointer-events: none;
+}
+
+.camera__topbar button {
+  pointer-events: auto;
 }
 
 .camera__controls {
@@ -157,6 +223,11 @@ body {
   justify-content: center;
   padding: 28px 16px calc(28px + env(safe-area-inset-bottom, 0px));
   background: linear-gradient(to top, rgba(0, 0, 0, 0.55), transparent);
+  pointer-events: none;
+}
+
+.camera__controls button {
+  pointer-events: auto;
 }
 
 .camera__shutter {

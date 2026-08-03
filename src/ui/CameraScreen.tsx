@@ -1,17 +1,20 @@
-import { Button, Loader, Stack, Text } from '@mantine/core'
+import { Button, Group, Loader, Stack, Text } from '@mantine/core'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import { cameraController, type CapturedFrame } from '../camera/camera-controller'
-import { cvClient } from '../worker/cv-client'
+import { CornerEditorView, type CornerEditorHandle } from '../corner-editor/CornerEditorView'
+import { fullFrameQuad } from '../corner-editor/geometry'
 import { createSinglePageDocument } from '../storage/useDocuments'
-import type { Point, Quad } from '../types'
+import { cvClient } from '../worker/cv-client'
+import type { Quad } from '../types'
 
 interface CameraScreenProps {
   onBack: () => void
 }
 
 /** A captured frame, its object URL, and its detected boundary.
- *  `quad` is null while detecting or if detection found nothing usable. */
+ *  `quad` is null only while detection is running; it becomes the detected Quad
+ *  or the full-frame fallback once detection settles. */
 interface Review {
   readonly url: string
   readonly frame: CapturedFrame
@@ -21,6 +24,7 @@ interface Review {
 
 export function CameraScreen({ onBack }: CameraScreenProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
+  const editorRef = useRef<CornerEditorHandle>(null)
   const status = useSyncExternalStore(
     cameraController.subscribe,
     cameraController.getStatus,
@@ -50,14 +54,15 @@ export function CameraScreen({ onBack }: CameraScreenProps) {
       const frame = await cameraController.capture()
       const url = URL.createObjectURL(new Blob([frame.bytes], { type: 'image/jpeg' }))
       setReview({ url, frame, quad: null, detecting: true })
-      // Detect the boundary in the worker. On error, leave quad null — Save then
-      // stores the full-frame placeholder quad.
-      let quad: Quad | null = null
+      // Detect the boundary in the worker. On error or no-match, fall back to a
+      // full-frame Quad so the user can still drag the corners on by hand.
+      const size = { width: frame.width, height: frame.height }
+      let quad: Quad
       try {
         const result = await cvClient.detect(frame.bytes)
-        quad = result.ok ? result.quad : null
+        quad = result.ok ? result.quad : fullFrameQuad(size)
       } catch {
-        quad = null
+        quad = fullFrameQuad(size)
       }
       setReview((r) => (r && r.url === url ? { ...r, quad, detecting: false } : r))
     } catch {
@@ -71,10 +76,13 @@ export function CameraScreen({ onBack }: CameraScreenProps) {
     if (!review) return
     setSaving(true)
     try {
+      // The editor holds the live (possibly adjusted) Quad; fall back to the
+      // detected Quad if the editor isn't mounted yet.
+      const quad = editorRef.current?.getQuad() ?? review.quad
       await createSinglePageDocument(
         `Документ · ${new Date().toLocaleTimeString()}`,
         review.frame,
-        review.quad ?? undefined,
+        quad ?? undefined,
       )
       onBack() // unmount revokes the review URL and stops the camera (no leaks)
     } catch {
@@ -93,15 +101,16 @@ export function CameraScreen({ onBack }: CameraScreenProps) {
 
       {review && (
         // One SVG whose viewBox is the image's pixels: photo + quad share the same
-        // user space, so the overlay aligns with no measuring.
-        <svg
+        // user space, so the overlay aligns with no measuring. The photo shows
+        // while detection runs (initialQuad null); corners become draggable
+        // once the boundary is known.
+        <CornerEditorView
           className="camera__review"
-          viewBox={`0 0 ${review.frame.width} ${review.frame.height}`}
-          preserveAspectRatio="xMidYMid meet"
-        >
-          <image href={review.url} x={0} y={0} width={review.frame.width} height={review.frame.height} />
-          {review.quad && <QuadOverlay quad={review.quad} span={review.frame} />}
-        </svg>
+          image={{ width: review.frame.width, height: review.frame.height }}
+          src={review.url}
+          initialQuad={review.quad}
+          ref={editorRef}
+        />
       )}
 
       {detecting && (
@@ -155,15 +164,26 @@ export function CameraScreen({ onBack }: CameraScreenProps) {
               <Button size="md" loading={saving} disabled={detecting} onClick={handleSave}>
                 Сохранить
               </Button>
-              <Button
-                variant="subtle"
-                color="gray"
-                size="xs"
-                disabled={saving}
-                onClick={() => setReview(null)}
-              >
-                Переснять
-              </Button>
+              <Group gap="xs">
+                <Button
+                  variant="subtle"
+                  color="gray"
+                  size="xs"
+                  disabled={saving || detecting}
+                  onClick={() => editorRef.current?.reset()}
+                >
+                  Сбросить
+                </Button>
+                <Button
+                  variant="subtle"
+                  color="gray"
+                  size="xs"
+                  disabled={saving}
+                  onClick={() => setReview(null)}
+                >
+                  Переснять
+                </Button>
+              </Group>
             </Stack>
           ) : (
             <button
@@ -177,26 +197,6 @@ export function CameraScreen({ onBack }: CameraScreenProps) {
         </div>
       )}
     </div>
-  )
-}
-
-/** Draws the detected boundary: a translucent fill, an outline, and four corner dots. */
-function QuadOverlay({
-  quad,
-  span,
-}: {
-  readonly quad: Quad
-  readonly span: { readonly width: number; readonly height: number }
-}) {
-  const points = quad.map((p) => `${p.x},${p.y}`).join(' ')
-  const r = Math.max(span.width, span.height) * 0.012
-  return (
-    <g>
-      <polygon points={points} className="camera__quad-shape" />
-      {quad.map((p: Point, i) => (
-        <circle key={i} cx={p.x} cy={p.y} r={r} className="camera__quad-dot" />
-      ))}
-    </g>
   )
 }
 

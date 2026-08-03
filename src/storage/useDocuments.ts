@@ -94,3 +94,21 @@ export async function removeDocument(id: string): Promise<void> {
   await storage.deleteDocument(id)
   await refresh()
 }
+
+/** Pure: a new Document with one Page's boundary Quad replaced (immutable). */
+export function replacePageQuad(doc: Document, pageId: string, quad: Quad): Document {
+  return { ...doc, pages: doc.pages.map((p) => (p.id === pageId ? { ...p, quad } : p)) }
+}
+
+/**
+ * Replace a single Page's boundary Quad (immutably) and persist the Document.
+ * The source photo is untouched — only the adjusted Quad is saved, so later
+ * flattening uses the corrected corners without rescanning. No-op if the
+ * document is missing.
+ */
+export async function updatePageQuad(docId: string, pageId: string, quad: Quad): Promise<void> {
+  const doc = await storage.getDocument(docId)
+  if (!doc) return
+  await storage.putDocument(replacePageQuad(doc, pageId, quad))
+  await refresh()
+}
