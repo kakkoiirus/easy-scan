@@ -274,3 +274,65 @@ body {
   background: rgba(0, 0, 0, 0.7);
   text-align: center;
 }
+
+/* Page strip — a horizontally scrollable row of portrait thumbnails for picking
+   which page of a multi-page Document the view shows. One row, no wrap. */
+.page-strip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 2px 1px 6px;
+  /* Keep the strip thin and page-shaped; hide the scrollbar for a cleaner row. */
+  scrollbar-width: none;
+}
+
+.page-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.page-strip__thumb {
+  position: relative;
+  flex: 0 0 auto;
+  width: 52px;
+  height: 72px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: #fff;
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.12s ease;
+}
+
+.page-strip__thumb--selected {
+  border-color: var(--mantine-color-blue-5, #4f9dff);
+}
+
+.page-strip__img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  -webkit-user-drag: none;
+}
+
+.page-strip__placeholder {
+  width: 100%;
+  height: 100%;
+  background: var(--mantine-color-dark-4, #2a2e38);
+}
+
+.page-strip__num {
+  position: absolute;
+  right: 3px;
+  bottom: 2px;
+  min-width: 14px;
+  padding: 0 3px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+  pointer-events: none;
+}
