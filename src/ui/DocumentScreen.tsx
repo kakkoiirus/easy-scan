@@ -10,9 +10,11 @@ import { ScreenShell } from './ScreenShell'
 interface DocumentScreenProps {
   docId: string
   onBack: () => void
+  /** Open the camera in add-page mode, bound to this Document. */
+  onAddPage: () => void
 }
 
-export function DocumentScreen({ docId, onBack }: DocumentScreenProps) {
+export function DocumentScreen({ docId, onBack, onAddPage }: DocumentScreenProps) {
   const [doc, setDoc] = useState<Document | undefined>(undefined)
   // The page the user is viewing/editing. Undefined until they pick one, in
   // which case the first page is shown — so opening a Document selects page 1.
@@ -72,6 +74,9 @@ export function DocumentScreen({ docId, onBack }: DocumentScreenProps) {
         <Text size="sm" c="dimmed" ta="center">
           {doc ? `${doc.pages.length} стр.` : 'загрузка…'}
         </Text>
+        <Button variant="light" disabled={!doc} onClick={onAddPage}>
+          Добавить страницу
+        </Button>
         <Button
           color="red"
           variant="light"

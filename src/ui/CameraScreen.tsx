@@ -9,6 +9,10 @@ import { cvClient } from '../worker/cv-client'
 import type { Quad } from '../types'
 
 interface CameraScreenProps {
+  /** Present → "add page to an existing Document" mode: the captured pages are
+   *  appended into this Document on "Готово" instead of starting a new one.
+   *  Absent → "capture a new Document" mode. */
+  readonly docId?: string
   onBack: () => void
 }
 
@@ -30,7 +34,7 @@ interface SessionPage {
   readonly quad: Quad
 }
 
-export function CameraScreen({ onBack }: CameraScreenProps) {
+export function CameraScreen({ docId, onBack }: CameraScreenProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const editorRef = useRef<CornerEditorHandle>(null)
   const status = useSyncExternalStore(
@@ -108,26 +112,38 @@ export function CameraScreen({ onBack }: CameraScreenProps) {
     setReview(null)
   }
 
-  /** Persist the whole batch as one Document: createDocument once, then
-   *  appendPage per captured page (the in-progress review is finalized in too, so
-   *  finishing from review saves it along with the rest). Nothing was written
-   *  before this; on success we leave the screen (unmount stops the camera). */
+  /** Persist the captured batch. In add-page mode (`docId` set) each page is
+   *  appended into the existing Document — its id, title, and earlier pages are
+   *  untouched, and no new Document is created. In new-document mode the batch
+   *  creates one Document (`createDocument` once, then `appendPage` per page).
+   *  The in-progress review is finalized in too, so finishing from review saves
+   *  it along with the rest. Nothing was written before this; on success we
+   *  leave the screen (unmount stops the camera). */
   async function handleDone(): Promise<void> {
     const reviewed = review ? [reviewToSessionPage()] : []
     const pages = [...session, ...reviewed]
     if (pages.length === 0) return
     setSaving(true)
-    let docId: string | null = null
+    // In add-page mode the target already exists (keep its id); in new-document
+    // mode we create it here. Either way, append each captured page in order.
+    let targetId = docId
     try {
-      docId = await createDocument(`Документ · ${new Date().toLocaleTimeString()}`)
-      for (const page of pages) await appendPage(docId, page.frame, page.quad)
+      if (!targetId) {
+        targetId = await createDocument(`Документ · ${new Date().toLocaleTimeString()}`)
+      }
+      for (const page of pages) await appendPage(targetId, page.frame, page.quad)
       onBack()
     } catch {
-      // Persist failed mid-batch — remove the partial Document (and the JPEGs
-      // already written) so a retry starts clean: the library never holds a
-      // half-saved batch, and retrying can't produce a duplicate. The in-memory
-      // session is untouched, so the user can retry or cancel.
-      if (docId) await removeDocument(docId).catch(() => {})
+      // New-document mode rolls the freshly-created Document back (remove it) so
+      // a retry starts clean — the library never holds a half-saved batch.
+      // Add-page mode NEVER removes the existing Document: it holds the user's
+      // earlier pages, which an append never touches, so those stay intact
+      // whatever happens. A mid-batch failure there leaves the new pages that did
+      // save in place; retrying would duplicate them (we can't un-append without
+      // a page remove), so the in-memory session is kept for a retry in new-doc
+      // mode only — in add-page mode the user should cancel (the saved pages
+      // remain in the Document) rather than retry.
+      if (targetId && !docId) await removeDocument(targetId).catch(() => {})
       setSaving(false)
     }
   }
