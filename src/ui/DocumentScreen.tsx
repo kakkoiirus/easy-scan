@@ -1,7 +1,12 @@
-import { Button, Stack, Text } from '@mantine/core'
+import { Button, Group, Stack, Text } from '@mantine/core'
 import { useCallback, useEffect, useState } from 'react'
 import { opfsStorage } from '../storage/opfs-storage'
-import { removeDocument } from '../storage/useDocuments'
+import {
+  movePage,
+  movePageInDocument,
+  removeDocument,
+  removePage,
+} from '../storage/useDocuments'
 import type { Document } from '../types'
 import { PagePane } from './PagePane'
 import { PageStrip } from './PageStrip'
@@ -46,6 +51,54 @@ export function DocumentScreen({ docId, onBack, onAddPage }: DocumentScreenProps
     [],
   )
 
+  // Index of the shown page in document order — drives the move-up/down enables.
+  const selectedPageIndex = doc?.pages.findIndex((p) => p.id === selectedPage?.id) ?? -1
+
+  /** Remove a single Page. Its source/flat/enhanced files are reclaimed; if it
+   *  was the last Page the whole Document is deleted and we return to the
+   *  library (no empty Documents). The selection falls back to the page now
+   *  sitting at the deleted slot — the next one, or the previous if it was last
+   *  — so the view never lands on a blank/broken state. Persisted first; the
+   *  local state only updates on success, so a failed remove leaves the UI
+   *  matching storage. */
+  async function handleDeletePage(pageId: string): Promise<void> {
+    const current = doc
+    if (!current) return
+    const deletedIndex = current.pages.findIndex((p) => p.id === pageId)
+    if (deletedIndex === -1) return
+    try {
+      await removePage(docId, pageId)
+    } catch {
+      return
+    }
+    const remaining = current.pages.filter((p) => p.id !== pageId)
+    if (remaining.length === 0) {
+      onBack()
+      return
+    }
+    setDoc({ ...current, pages: remaining })
+    setSelectedPageId(remaining[Math.min(deletedIndex, remaining.length - 1)].id)
+  }
+
+  /** Move the selected Page one slot earlier (`dir = -1`) or later (`dir = 1`).
+   *  Persisted first; on success the local order updates. The selection stays on
+   *  the moved Page (its id is unchanged), so the view follows it to its new
+   *  position and the strip re-renders in the new order. No-op at the ends. */
+  async function handleMovePage(pageId: string, dir: -1 | 1): Promise<void> {
+    const current = doc
+    if (!current) return
+    const from = current.pages.findIndex((p) => p.id === pageId)
+    if (from === -1) return
+    const to = from + dir
+    if (to < 0 || to >= current.pages.length) return
+    try {
+      await movePage(docId, from, to)
+    } catch {
+      return
+    }
+    setDoc(movePageInDocument(current, from, to))
+  }
+
   return (
     <ScreenShell
       title={doc?.title ?? 'Документ'}
@@ -62,6 +115,41 @@ export function DocumentScreen({ docId, onBack, onAddPage }: DocumentScreenProps
             selectedPageId={selectedPage?.id}
             onSelect={setSelectedPageId}
           />
+        )}
+        {/* Per-page actions sit with the strip and act on the selected page.
+            Reorder is only meaningful with more than one page; the ends disable
+            move-up / move-down. Deleting the selected page falls back to a
+            sibling (handled in `handleDeletePage`). */}
+        {doc && selectedPage && (
+          <>
+            {doc.pages.length > 1 && (
+              <Group gap="xs" grow>
+                <Button
+                  variant="light"
+                  size="xs"
+                  disabled={selectedPageIndex <= 0}
+                  onClick={() => void handleMovePage(selectedPage.id, -1)}
+                >
+                  Вверх
+                </Button>
+                <Button
+                  variant="light"
+                  size="xs"
+                  disabled={selectedPageIndex >= doc.pages.length - 1}
+                  onClick={() => void handleMovePage(selectedPage.id, 1)}
+                >
+                  Вниз
+                </Button>
+              </Group>
+            )}
+            <Button
+              variant="light"
+              color="red"
+              onClick={() => void handleDeletePage(selectedPage.id)}
+            >
+              Удалить страницу
+            </Button>
+          </>
         )}
         {doc && selectedPage && (
           <PagePane
@@ -86,7 +174,7 @@ export function DocumentScreen({ docId, onBack, onAddPage }: DocumentScreenProps
             onBack()
           }}
         >
-          Удалить
+          Удалить документ
         </Button>
         <Text size="xs" c="dimmed" ta="center">
           Экспорт в PDF — этап M7.

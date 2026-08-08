@@ -52,6 +52,10 @@ const { storage, state } = vi.hoisted(() => {
       const b = state.files.get(path)
       return Promise.resolve(b ? new Blob([b]) : undefined)
     },
+    deletePageFile: (path: string) => {
+      state.files.delete(path)
+      return Promise.resolve()
+    },
   }
   return { storage, state }
 })
@@ -65,6 +69,10 @@ import {
   appendPage,
   createDocument,
   createSinglePageDocument,
+  movePage,
+  movePageInDocument,
+  removePage,
+  removePageFromDocument,
   setPageFlat,
   setPageEnhanced,
 } from './useDocuments'
@@ -259,5 +267,152 @@ describe('appendPage to an existing Document', () => {
     const after = await storage.getDocument(docId)
     expect(after?.title).toBe(before.title)
     expect(after?.createdAt).toBe(before.createdAt)
+  })
+})
+
+// --- Remove a page (ticket 04) ----------------------------------------------
+// Removing a Page is the one place derived files ARE reclaimed: the page is gone
+// entirely (unlike a Quad-edit, which leaves orphaned flat/enhanced), so its
+// source/flat/enhanced JPEGs go with it. Siblings — including their flat/enhanced
+// results — are untouched. Emptying a Document deletes it (no empty Documents).
+
+describe('removePageFromDocument', () => {
+  it('drops only the target page; siblings (and their flat/enhanced) are intact', () => {
+    const p1 = { ...page('p1'), flat: { file: 'documents/d/p1.flat.jpg', width: 1, height: 1 } }
+    const p2 = page('p2')
+    const p3 = { ...page('p3'), enhanced: { file: 'documents/d/p3.enh.jpg', width: 1, height: 1 } }
+    const original = doc('d1', [p1, p2, p3])
+
+    const next = removePageFromDocument(original, 'p2')
+
+    expect(next.pages.map((p) => p.id)).toEqual(['p1', 'p3'])
+    // The untouched siblings keep their derived results exactly.
+    expect(next.pages[0]).toEqual(p1)
+    expect(next.pages[1]).toEqual(p3)
+    // Immutable: the source Document is unchanged.
+    expect(original.pages.map((p) => p.id)).toEqual(['p1', 'p2', 'p3'])
+  })
+
+  it('is a no-op (returns an equivalent Document) when the page id is absent', () => {
+    const original = doc('d1', [page('p1'), page('p2')])
+
+    const next = removePageFromDocument(original, 'missing')
+
+    expect(next.pages.map((p) => p.id)).toEqual(['p1', 'p2'])
+  })
+})
+
+describe('removePage', () => {
+  it('reclaims the removed page’s source/flat/enhanced files but not its siblings’', async () => {
+    const docId = await createDocument('Contract')
+    await appendPage(docId, IMAGE, QUAD)
+    await appendPage(docId, IMAGE, QUAD)
+    const [first, second] = (await storage.getDocument(docId))!.pages
+    // Materialise both pages fully; only the second page should be reclaimed.
+    await setPageFlat(docId, first.id, FLAT_BYTES, 10, 8)
+    await setPageEnhanced(docId, first.id, ENH_BYTES, 10, 8)
+    await setPageFlat(docId, second.id, FLAT_BYTES, 10, 8)
+    await setPageEnhanced(docId, second.id, ENH_BYTES, 10, 8)
+    const before = (await storage.getDocument(docId))!
+    const doomed = before.pages[1]
+
+    await removePage(docId, doomed.id)
+
+    const after = await storage.getDocument(docId)
+    expect(after?.pages).toHaveLength(1)
+    expect(after?.pages[0].id).toBe(first.id)
+    // The removed page’s files are gone — source, flat, and enhanced.
+    expect(state.files.get(doomed.file)).toBeUndefined()
+    expect(state.files.get(doomed.flat!.file)).toBeUndefined()
+    expect(state.files.get(doomed.enhanced!.file)).toBeUndefined()
+    // The surviving sibling keeps every file it had.
+    expect(state.files.get(before.pages[0].file)).toBeDefined()
+    expect(state.files.get(before.pages[0].flat!.file)).toBeDefined()
+    expect(state.files.get(before.pages[0].enhanced!.file)).toBeDefined()
+  })
+
+  it('deletes the whole Document when the last page is removed (no empty Documents)', async () => {
+    const docId = await createDocument('Contract')
+    await appendPage(docId, IMAGE, QUAD)
+    const onlyPage = (await storage.getDocument(docId))!.pages[0]
+
+    await removePage(docId, onlyPage.id)
+
+    expect(await storage.getDocument(docId)).toBeUndefined()
+    expect(await storage.listDocuments()).toHaveLength(0)
+    // The last page’s source file is reclaimed along with the Document.
+    expect(state.files.get(onlyPage.file)).toBeUndefined()
+  })
+})
+
+// --- Reorder pages (ticket 04) ----------------------------------------------
+// movePage is an immutable array reorder; the persisted order is the source of
+// truth a later export consumes (not a view-only sort), so it must survive a
+// re-read. Out-of-range moves are safe no-ops (move-up at the top, etc.).
+
+describe('movePageInDocument', () => {
+  it('moves a page earlier without mutating the source Document', () => {
+    const original = doc('d1', [page('p1'), page('p2'), page('p3')])
+
+    const next = movePageInDocument(original, 2, 0) // p3 to the front
+
+    expect(next.pages.map((p) => p.id)).toEqual(['p3', 'p1', 'p2'])
+    expect(original.pages.map((p) => p.id)).toEqual(['p1', 'p2', 'p3'])
+  })
+
+  it('moves a page later', () => {
+    const original = doc('d1', [page('p1'), page('p2'), page('p3')])
+
+    const next = movePageInDocument(original, 0, 2) // p1 to the back
+
+    expect(next.pages.map((p) => p.id)).toEqual(['p2', 'p3', 'p1'])
+  })
+
+  it('is a no-op when either index is out of range', () => {
+    const original = doc('d1', [page('p1'), page('p2')])
+
+    expect(movePageInDocument(original, -1, 0).pages.map((p) => p.id)).toEqual(['p1', 'p2'])
+    expect(movePageInDocument(original, 0, 5).pages.map((p) => p.id)).toEqual(['p1', 'p2'])
+    expect(movePageInDocument(original, 0, 0).pages.map((p) => p.id)).toEqual(['p1', 'p2'])
+  })
+
+  it('keeps each moved page’s flat/enhanced results attached', () => {
+    const p1 = page('p1')
+    const p2 = { ...page('p2'), flat: { file: 'documents/d/p2.flat.jpg', width: 1, height: 1 } }
+    const original = doc('d1', [p1, p2])
+
+    const next = movePageInDocument(original, 1, 0)
+
+    // p2 moved to the front, still carrying its flat result.
+    expect(next.pages[0]).toEqual(p2)
+    expect(next.pages[1]).toEqual(p1)
+  })
+})
+
+describe('movePage', () => {
+  it('persists the new order and survives a re-read', async () => {
+    const docId = await createDocument('Contract')
+    await appendPage(docId, { ...IMAGE, bytes: new Uint8Array([1]) })
+    await appendPage(docId, { ...IMAGE, bytes: new Uint8Array([2]) })
+    await appendPage(docId, { ...IMAGE, bytes: new Uint8Array([3]) })
+    const before = (await storage.getDocument(docId))!
+    const movedId = before.pages[2].id
+
+    await movePage(docId, 2, 0) // last page to the front
+
+    const after = await storage.getDocument(docId)
+    expect(after?.pages.map((p) => p.id)).toEqual([movedId, before.pages[0].id, before.pages[1].id])
+  })
+
+  it('leaves the Document unchanged for an out-of-range move', async () => {
+    const docId = await createDocument('Contract')
+    await appendPage(docId, IMAGE, QUAD)
+    await appendPage(docId, IMAGE, QUAD)
+    const before = (await storage.getDocument(docId))!
+
+    await movePage(docId, 0, 9)
+
+    const after = await storage.getDocument(docId)
+    expect(after?.pages.map((p) => p.id)).toEqual(before.pages.map((p) => p.id))
   })
 })

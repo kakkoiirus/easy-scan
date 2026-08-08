@@ -25,4 +25,6 @@ export type Storage = {
   readonly putPageEnhanced: (docId: string, pageId: string, bytes: Bytes) => Promise<string>
   /** Read a page image as a Blob by path, or undefined if missing. */
   readonly getPageImage: (path: string) => Promise<Blob | undefined>
+  /** Best-effort delete of a page image file by path (no-op if missing). */
+  readonly deletePageFile: (path: string) => Promise<void>
 }

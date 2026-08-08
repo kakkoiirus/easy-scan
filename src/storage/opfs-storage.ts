@@ -55,6 +55,20 @@ async function writePageFile(docId: string, name: string, bytes: Bytes): Promise
   return `${DOCS_DIR}/${docId}/${name}`
 }
 
+/** Walk a `documents/<docId>/<name>` path to its parent directory and return that
+ *  directory plus the leaf file name. Throws if any segment is missing — callers
+ *  catch and treat a missing file as absent. Shared by the by-path read/delete. */
+async function parentDirOf(
+  path: string,
+): Promise<{ dir: FileSystemDirectoryHandle; name: string }> {
+  const parts = path.split('/')
+  let dir = await root()
+  for (let i = 0; i < parts.length - 1; i += 1) {
+    dir = await dir.getDirectoryHandle(parts[i] as string)
+  }
+  return { dir, name: parts[parts.length - 1] as string }
+}
+
 export const opfsStorage: Storage = {
   async listDocuments(): Promise<readonly DocumentSummary[]> {
     const docs = await readLibrary()
@@ -99,15 +113,21 @@ export const opfsStorage: Storage = {
 
   async getPageImage(path: string): Promise<Blob | undefined> {
     try {
-      const parts = path.split('/')
-      let current = await root()
-      for (let i = 0; i < parts.length - 1; i += 1) {
-        current = await current.getDirectoryHandle(parts[i] as string)
-      }
-      const fileHandle = await current.getFileHandle(parts[parts.length - 1] as string)
-      return await fileHandle.getFile()
+      const { dir, name } = await parentDirOf(path)
+      return await (await dir.getFileHandle(name)).getFile()
     } catch {
       return undefined
+    }
+  },
+
+  async deletePageFile(path: string): Promise<void> {
+    // Best-effort: a page's flat/enhanced may never have materialised, so the
+    // file may not exist — mirror `deleteDocument`'s folder-removal and swallow.
+    try {
+      const { dir, name } = await parentDirOf(path)
+      await dir.removeEntry(name)
+    } catch {
+      // File missing — nothing to reclaim.
     }
   },
 }

@@ -66,6 +66,28 @@ export function appendPageToDocument(doc: Document, page: Page): Document {
   return { ...doc, pages: [...doc.pages, page] }
 }
 
+/** Pure: a new Document with one Page removed (immutable). No-op (equivalent
+ *  Document) when the id is absent. Returns an empty-pages Document if it was
+ *  the last page — the persisted `removePage` deletes the whole Document then,
+ *  so the library never holds an empty Document. */
+export function removePageFromDocument(doc: Document, pageId: string): Document {
+  return { ...doc, pages: doc.pages.filter((p) => p.id !== pageId) }
+}
+
+/** Pure: a new Document with one Page moved from `fromIndex` to `toIndex`
+ *  (immutable array move, no in-place mutation). No-op (returns the same
+ *  Document) when either index is out of range or they are equal, so move-up at
+ *  the top / move-down at the bottom are safe. The page objects are reused by
+ *  reference, so each moved page keeps its flat/enhanced results. */
+export function movePageInDocument(doc: Document, fromIndex: number, toIndex: number): Document {
+  if (fromIndex < 0 || fromIndex >= doc.pages.length) return doc
+  if (toIndex < 0 || toIndex >= doc.pages.length) return doc
+  if (fromIndex === toIndex) return doc
+  const moved = doc.pages[fromIndex]
+  const rest = doc.pages.filter((_, i) => i !== fromIndex)
+  return { ...doc, pages: [...rest.slice(0, toIndex), moved, ...rest.slice(toIndex)] }
+}
+
 /**
  * Persist a new empty Document (no pages) and return its id. The capture
  * session calls this once, then `appendPage` per captured page at "Готово".
@@ -129,6 +151,52 @@ export async function createSinglePageDocument(
 
 export async function removeDocument(id: string): Promise<void> {
   await storage.deleteDocument(id)
+  await refresh()
+}
+
+/** Best-effort reclaim of a Page's OPFS files: its source JPEG always, plus the
+ *  flat/enhanced JPEGs when they have materialised. Each delete is swallowed so a
+ *  missing derived file (never viewed) can't abort removing the page — mirroring
+ *  `deleteDocument`'s folder-removal. */
+async function reclaimPageFiles(page: Page): Promise<void> {
+  const paths = [page.file, page.flat?.file, page.enhanced?.file].filter(
+    (p): p is string => p != null,
+  )
+  await Promise.all(paths.map((p) => storage.deletePageFile(p)))
+}
+
+/**
+ * Remove a single Page: reclaim its source/flat/enhanced OPFS files (the page is
+ * gone entirely — unlike a `Quad`-edit, which leaves orphaned derived files), drop
+ * it from the array, persist, and refresh. If it was the last Page, the whole
+ * Document is deleted instead so the library holds no empty Documents — mirroring
+ * `deleteDocument`'s reclaim. No-op if the Document or Page is missing.
+ */
+export async function removePage(docId: string, pageId: string): Promise<void> {
+  const doc = await storage.getDocument(docId)
+  if (!doc) return
+  const page = doc.pages.find((p) => p.id === pageId)
+  if (!page) return
+  await reclaimPageFiles(page)
+  const next = removePageFromDocument(doc, pageId)
+  if (next.pages.length === 0) {
+    await storage.deleteDocument(docId)
+  } else {
+    await storage.putDocument(next)
+  }
+  await refresh()
+}
+
+/**
+ * Reorder one Page within a Document: an immutable array move (`movePageInDocument`)
+ * then persist and refresh. Out-of-range indices are a no-op. The persisted order
+ * is the source of truth a later export consumes — not a view-only sort — so it
+ * survives reopening the Document. No-op if the Document is missing.
+ */
+export async function movePage(docId: string, fromIndex: number, toIndex: number): Promise<void> {
+  const doc = await storage.getDocument(docId)
+  if (!doc) return
+  await storage.putDocument(movePageInDocument(doc, fromIndex, toIndex))
   await refresh()
 }
 
