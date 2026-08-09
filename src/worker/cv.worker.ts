@@ -3,6 +3,13 @@
 import * as opencv from '@techstark/opencv-js'
 import type { Bytes, EnhanceMode, Point, Quad } from '../types'
 import { computeFlatSize } from './flatten-geometry'
+import {
+  isConvex,
+  orderCorners,
+  pickContourIndex,
+  polygonArea,
+  type ContourCandidate,
+} from './detect-geometry'
 import type { CvRequest, CvResponse } from './protocol'
 
 /**
@@ -54,30 +61,57 @@ function scaleQuad(quad: Quad, factor: number): Quad {
   return [scale(quad[0]), scale(quad[1]), scale(quad[2]), scale(quad[3])]
 }
 
-/** Order four points as TL, TR, BR, BL by their coordinate sums/differences. */
-function orderCorners(pts: readonly Point[]): Quad {
-  const sum = pts.map((p) => p.x + p.y)
-  const diff = pts.map((p) => p.x - p.y)
-  const minIndex = (arr: readonly number[]): number => arr.indexOf(Math.min(...arr))
-  const maxIndex = (arr: readonly number[]): number => arr.indexOf(Math.max(...arr))
-  return [pts[minIndex(sum)], pts[maxIndex(sum)], pts[maxIndex(diff)], pts[minIndex(diff)]]
+/** Read the points of a CV_32SC2 Mat (a findContours/convexHull/approxPolyDP
+ *  result) as plain Points — `rows` points, two ints each. */
+function contourPoints(contour: { readonly rows: number; readonly data32S: Int32Array }): Point[] {
+  const d = contour.data32S
+  const n = contour.rows
+  const pts: Point[] = []
+  for (let i = 0; i < n; i += 1) {
+    pts.push({ x: d[i * 2], y: d[i * 2 + 1] })
+  }
+  return pts
 }
 
-/** Read the four points of an approxPolyDP result (CV_32SC2, 4 rows) and order them. */
-function cornersFromApprox(approx: { readonly data32S: Int32Array }): Quad {
-  const d = approx.data32S
-  return orderCorners([
-    { x: d[0], y: d[1] },
-    { x: d[2], y: d[3] },
-    { x: d[4], y: d[5] },
-    { x: d[6], y: d[7] },
-  ])
+/** The four corners of an OpenCV `RotatedRect` (`minAreaRect` output), rotated
+ *  about its centre. OpenCV's `angle` is clockwise in screen space (y grows down). */
+function rotatedRectCorners(rect: {
+  readonly center: Point
+  readonly size: { readonly width: number; readonly height: number }
+  readonly angle: number
+}): Point[] {
+  const angle = (rect.angle * Math.PI) / 180
+  const cos = Math.cos(angle)
+  const sin = Math.sin(angle)
+  const hw = rect.size.width / 2
+  const hh = rect.size.height / 2
+  const cx = rect.center.x
+  const cy = rect.center.y
+  const local: readonly Point[] = [
+    { x: -hw, y: -hh },
+    { x: hw, y: -hh },
+    { x: hw, y: hh },
+    { x: -hw, y: hh },
+  ]
+  return local.map((pt) => ({
+    x: cx + pt.x * cos - pt.y * sin,
+    y: cy + pt.x * sin + pt.y * cos,
+  }))
 }
 
 /**
- * Find the largest quadrilateral contour in `imageData`, or null. Pure-ish: it
- * only mutates the OpenCV objects it creates and frees them before returning.
- * Pipeline: grayscale -> blur -> Canny -> findContours -> approxPolyDP.
+ * Find the document boundary in `imageData`, or null. Pure-ish: it only mutates
+ * the OpenCV objects it creates and frees them before returning.
+ *
+ * Pipeline: grayscale -> blur -> Canny (auto-thresholded via Otsu) ->
+ * morphological close -> findContours. Selection is delegated to the pure
+ * `pickContourIndex` policy — the largest contour that does NOT touch the frame
+ * border (the image's own border was always the largest 4-gon, so the old
+ * "biggest wins" rule returned the whole frame). The chosen contour is then
+ * force-fit to four corners: approximate the convex hull to exactly four points
+ * (binary-searching epsilon), falling back to the minimum-area rectangle.
+ * Returns null only when no interior contour survives or the fit is degenerate
+ * — the caller then falls back to the full frame.
  */
 function detectQuad(cv: CvNamespace, imageData: ImageData): Quad | null {
   const allocated: unknown[] = []
@@ -87,40 +121,85 @@ function detectQuad(cv: CvNamespace, imageData: ImageData): Quad | null {
     allocated.push(value)
     return value
   }
-  const minArea = imageData.width * imageData.height * 0.1
-  let best: { readonly pts: Quad; readonly area: number } | null = null
+  const width = imageData.width
+  const height = imageData.height
+  const minAreaRatio = 0.1
+  const minArea = width * height * minAreaRatio
 
   try {
     const src = track(cv.matFromImageData(imageData))
     const gray = track(new cv.Mat())
+    const otsuOut = track(new cv.Mat()) // Otsu's binary output, discarded
+    const edges = track(new cv.Mat())
+    const ksize = track(new cv.Size(5, 5))
+    const closeKernel = track(
+      cv.getStructuringElement(cv.MORPH_RECT, track(new cv.Size(9, 9))),
+    )
     const contours = track(new cv.MatVector())
     const hierarchy = track(new cv.Mat())
-    const ksize = track(new cv.Size(5, 5))
-    const approx = track(new cv.Mat())
 
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY)
     cv.GaussianBlur(gray, gray, ksize, 0, 0, cv.BORDER_DEFAULT)
-    cv.Canny(gray, gray, 75, 200)
-    cv.findContours(gray, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE)
+    // Auto-Canny: derive the thresholds from an Otsu split so they adapt to the
+    // scene's lighting instead of the old fixed 75/200. Fall back to a mid
+    // threshold if the build returns no Otsu value.
+    const otsu: unknown = cv.threshold(
+      gray,
+      otsuOut,
+      0,
+      255,
+      cv.THRESH_BINARY + cv.THRESH_OTSU,
+    )
+    const t = typeof otsu === 'number' && otsu > 0 ? otsu : 127
+    cv.Canny(gray, edges, 0.66 * t, 1.33 * t)
+    // Close small gaps so the document's outline becomes one continuous contour.
+    cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, closeKernel)
+    cv.findContours(edges, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE)
 
+    // Descriptors for contours clearing the area floor. Their Mats are read and
+    // freed here; the chosen contour is re-acquired for the force-fit below.
+    const candidates: ContourCandidate[] = []
+    const contourIndexFor: number[] = []
     for (let i = 0; i < contours.size(); i += 1) {
       const contour = contours.get(i)
       try {
-        const area = cv.contourArea(contour)
-        if (area < minArea) continue
-        const peri = cv.arcLength(contour, true)
-        cv.approxPolyDP(contour, approx, 0.02 * peri, true)
-        if (approx.rows === 4 && (best === null || area > best.area)) {
-          best = { pts: cornersFromApprox(approx), area }
-        }
+        if (cv.contourArea(contour) < minArea) continue
+        const points = contourPoints(contour)
+        candidates.push({ points, area: polygonArea(points) })
+        contourIndexFor.push(i)
       } finally {
         dispose(contour)
       }
     }
+
+    const chosen = pickContourIndex(candidates, { width, height, minAreaRatio })
+    if (chosen < 0) return null
+    const contour = track(contours.get(contourIndexFor[chosen]))
+
+    // Force-fit: approximate the convex hull to exactly four points.
+    const hull = track(new cv.Mat())
+    cv.convexHull(contour, hull, false, true)
+    const peri = cv.arcLength(hull, true)
+    const approx = track(new cv.Mat())
+    let lo = peri * 0.002
+    let hi = peri * 0.2
+    for (let it = 0; it < 10; it += 1) {
+      const eps = (lo + hi) / 2
+      cv.approxPolyDP(hull, approx, eps, true)
+      if (approx.rows === 4) {
+        const quad = orderCorners(contourPoints(approx))
+        return isConvex(quad) ? quad : null
+      }
+      if (approx.rows > 4) lo = eps // too many points: merge harder
+      else hi = eps // too few: merge less
+    }
+
+    // Couldn't settle on four via approximation -> minimum-area rectangle.
+    const quad = orderCorners(rotatedRectCorners(cv.minAreaRect(contour)))
+    return isConvex(quad) ? quad : null
   } finally {
     for (const value of allocated) dispose(value)
   }
-  return best?.pts ?? null
 }
 
 /** Decode `bytes`, detect the boundary, and return the Quad in full-source-pixel coords. */
