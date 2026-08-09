@@ -3,6 +3,7 @@
 import * as opencv from '@techstark/opencv-js'
 import type { Bytes, EnhanceMode, Point, Quad } from '../types'
 import { computeFlatSize } from './flatten-geometry'
+import { applyColorLuts, buildColorLuts, grayWorldGains } from './color-enhance'
 import {
   isConvex,
   orderCorners,
@@ -323,15 +324,17 @@ interface EnhancedPixels {
   readonly data: Uint8ClampedArray<ArrayBuffer>
 }
 
+// The color tonal cleanup (gray-world white balance + linear contrast stretch)
+// lives in the pure, tested `color-enhance.ts`; `enhanceColor` below adds
+// OpenCV's HSV saturation lift on top.
+
 /**
- * Color enhancement: a real tonal pass on the flat color image (not a no-op).
- * Boosts saturation and normalizes the luminance contrast for a crisp, vivid
- * look. Pure-ish: only mutates/frees the OpenCV objects it creates. Works in
- * HSV so hue is preserved while S/V are reshaped.
- *
- * We move to RGB (dropping alpha) → HSV, split, reshape S and V, merge back to
- * RGB, then re-attach a constant alpha=255 by hand (OpenCV's RGB→RGBA channel
- * add leaves alpha ambiguous, so the explicit copy is the reliable path).
+ * Color enhancement: keep the flat page faithful to the photograph — only
+ * flattened — with a mild, *global* cleanup: gray-world white balance, a linear
+ * contrast stretch that fires solely on dark/flat pages, and a barely-there
+ * saturation lift. No density-based luminance remap, so the paper stays clean
+ * instead of turning dirty gray (see `color-enhance.ts`).
+ * Pure-ish: only mutates/frees the OpenCV objects it creates.
  */
 function enhanceColor(cv: CvNamespace, imageData: ImageData): EnhancedPixels {
   const width = imageData.width
@@ -342,37 +345,26 @@ function enhanceColor(cv: CvNamespace, imageData: ImageData): EnhancedPixels {
     return value
   }
   try {
+    // WB + linear stretch run as pure functions over the source pixels…
     const src = track(cv.matFromImageData(imageData))
-    const rgb = track(new cv.Mat())
-    cv.cvtColor(src, rgb, cv.COLOR_RGBA2RGB)
+    const gains = grayWorldGains(src.data, { min: 0.8, max: 1.25 })
+    const luts = buildColorLuts(src.data, gains, { minSpan: 200, pLo: 0.02, pHi: 0.98 })
+    const rgbBytes = applyColorLuts(src.data, luts)
+    // …then the cleaned-up RGB goes to OpenCV for the saturation lift only.
+    const rgb = track(cv.matFromArray(height, width, cv.CV_8UC3, rgbBytes))
     const hsv = track(new cv.Mat())
     cv.cvtColor(rgb, hsv, cv.COLOR_RGB2HSV)
-
     const parts = track(new cv.MatVector())
     cv.split(hsv, parts)
     const h = track(parts.get(0))
     const s = track(parts.get(1))
     const v = track(parts.get(2))
-
-    // Saturation boost → a vivid, clean color page.
     const sBoost = track(new cv.Mat())
-    cv.convertScaleAbs(s, sBoost, 1.3, 0)
-    // Contrast normalization on luminance. @techstark/opencv-js's TS types
-    // declare functions its runtime build omits — createCLAHE is absent in this
-    // build (a class/factory binding), so prefer the plain free function
-    // equalizeHist but feature-check it and fall back to a linear stretch.
-    // convertScaleAbs is already known to be present (it runs above).
-    const vOut = track(new cv.Mat())
-    if (typeof cv.equalizeHist === 'function') {
-      cv.equalizeHist(v, vOut)
-    } else {
-      cv.convertScaleAbs(v, vOut, 1.2, 0)
-    }
-
+    cv.convertScaleAbs(s, sBoost, 1.05, 0)
     const merged = track(new cv.MatVector())
     merged.push_back(h)
     merged.push_back(sBoost)
-    merged.push_back(vOut)
+    merged.push_back(v)
     const hsv2 = track(new cv.Mat())
     cv.merge(merged, hsv2)
     const rgb2 = track(new cv.Mat())

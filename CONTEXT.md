@@ -15,3 +15,19 @@ _Avoid_: image, sheet, picture, scan (as a noun)
 **Quad**:
 The four corners that mark a Page's boundary on its source photo — ordered top-left, top-right, bottom-right, bottom-left — in source-pixel coordinates. Used to crop and perspective-correct ("flatten") the page.
 _Avoid_: polygon, outline, contour, bounding box
+
+## Enhancement
+
+The look applied to a Page after flattening — chosen per page, in the browser.
+
+**Color**:
+The page kept as a faithful colour photograph — only flattened, with a mild, global white-balance and contrast cleanup. Not vivid or "enhanced"; the default look.
+_Avoid_: original, photo (as a mode name), vivid, enhanced
+
+**Grayscale**:
+The page desaturated to a clean, legible grey.
+_Avoid_: mono, black and white, greyscale (variant spelling)
+
+**Black & White**:
+The page thresholded to crisp ink on paper — the "scanned document" look.
+_Avoid_: binary, mono, threshold, B&W (ambiguous with Grayscale)
