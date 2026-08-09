@@ -2,7 +2,12 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
-export default defineConfig({
+export default defineConfig(({ command, isPreview }) => ({
+  // Pages serves the app at a project subpath
+  // (kakkoiirus.github.io/easy-scan/, ADR-0004). The production build and its
+  // preview use that base; the dev server stays at the root for a clean
+  // localhost:5173/.
+  base: command === 'serve' && !isPreview ? '/' : '/easy-scan/',
   plugins: [
     react(),
     VitePWA({
@@ -22,13 +27,18 @@ export default defineConfig({
         background_color: '#0b0d12',
         display: 'standalone',
         orientation: 'portrait',
-        start_url: '/',
+        // Relative so they resolve against the manifest's own URL — correct
+        // under both dev (base '/') and the Pages subpath (base '/easy-scan/',
+        // ADR-0004). `id` keeps the install identity stable across base changes.
+        id: 'easy-scan',
+        start_url: '.',
+        scope: '.',
         // SVG icon is enough to install on Chrome/Android; add 192/512 PNG maskable icons at M8.
-        icons: [{ src: '/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' }],
+        icons: [{ src: 'icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' }],
       },
     }),
   ],
   worker: {
     format: 'es',
   },
-})
+}))

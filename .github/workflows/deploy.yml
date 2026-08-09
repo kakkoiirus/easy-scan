@@ -1,0 +1,50 @@
+# Builds the production bundle and publishes it to GitHub Pages (ADR-0004).
+# The app is served at kakkoiirus.github.io/easy-scan/.
+#
+# One-time repo setup (Settings → Pages): set Source = "GitHub Actions".
+# Until that's done the build still succeeds, but the deploy step will fail.
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # manual run from the Actions tab
+
+# Permissions the Pages deployment needs; the default GITHUB_TOKEN is narrower.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one live deployment at a time — cancel a run superseded by a newer push.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - uses: actions/configure-pages@v6
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: dist
+
+      - id: deploy
+        uses: actions/deploy-pages@v5
