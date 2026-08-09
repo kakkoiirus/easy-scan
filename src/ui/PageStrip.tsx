@@ -1,6 +1,6 @@
 import { UnstyledButton } from '@mantine/core'
 import type { Page } from '../types'
-import { bestImageFile } from './page-image'
+import { bestImageFile } from '../page-image'
 import { useObjectUrl } from './useObjectUrl'
 
 /**

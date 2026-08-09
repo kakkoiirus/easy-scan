@@ -1,5 +1,6 @@
 import { Button, Group, Stack, Text } from '@mantine/core'
 import { useCallback, useEffect, useState } from 'react'
+import { exportDocument } from '../export/export-document'
 import { opfsStorage } from '../storage/opfs-storage'
 import {
   movePage,
@@ -19,11 +20,20 @@ interface DocumentScreenProps {
   onAddPage: () => void
 }
 
+/** PDF-export UI state — idle, preparing the pages + PDF, or a surfaced error. */
+type ExportState =
+  | { readonly status: 'idle' }
+  | { readonly status: 'exporting' }
+  | { readonly status: 'error'; readonly message: string }
+
 export function DocumentScreen({ docId, onBack, onAddPage }: DocumentScreenProps) {
   const [doc, setDoc] = useState<Document | undefined>(undefined)
   // The page the user is viewing/editing. Undefined until they pick one, in
   // which case the first page is shown — so opening a Document selects page 1.
   const [selectedPageId, setSelectedPageId] = useState<string | undefined>(undefined)
+  // PDF export: a discriminated union so idle / preparing / error can't combine
+  // into an impossible state. Mirrors the `ExportOutcome` shape export returns.
+  const [exportState, setExportState] = useState<ExportState>({ status: 'idle' })
 
   // Load the Document. Only the doc lives here; each Page's source/flat/enhanced
   // bytes are owned by the keyed `PagePane` below, so switching pages re-loads
@@ -99,6 +109,24 @@ export function DocumentScreen({ docId, onBack, onAddPage }: DocumentScreenProps
     setDoc(movePageInDocument(current, from, to))
   }
 
+  /** Export the Document to a multi-page PDF. Any page not yet materialised is
+   *  prepared first (the worker runs its flatten/enhance), so the PDF always
+   *  reflects the chosen look; the file is then shared on mobile or downloaded.
+   *  The Document is re-read afterwards so freshly-materialised pages show. */
+  async function handleExport(): Promise<void> {
+    if (!doc || exportState.status === 'exporting') return
+    setExportState({ status: 'exporting' })
+    try {
+      const outcome = await exportDocument(docId)
+      setExportState(outcome.ok ? { status: 'idle' } : { status: 'error', message: outcome.error })
+    } finally {
+      // Reflect any pages materialised during export (flat/enhanced now on disk).
+      opfsStorage.getDocument(docId).then((fresh) => {
+        if (fresh) setDoc(fresh)
+      })
+    }
+  }
+
   return (
     <ScreenShell
       title={doc?.title ?? 'Документ'}
@@ -162,6 +190,19 @@ export function DocumentScreen({ docId, onBack, onAddPage }: DocumentScreenProps
         <Text size="sm" c="dimmed" ta="center">
           {doc ? `${doc.pages.length} стр.` : 'загрузка…'}
         </Text>
+        <Button
+          color="blue"
+          loading={exportState.status === 'exporting'}
+          disabled={!doc || exportState.status === 'exporting'}
+          onClick={() => void handleExport()}
+        >
+          {exportState.status === 'exporting' ? 'готовим страницы…' : 'Экспорт PDF'}
+        </Button>
+        {exportState.status === 'error' && (
+          <Text size="xs" c="red" ta="center">
+            {exportState.message}
+          </Text>
+        )}
         <Button variant="light" disabled={!doc} onClick={onAddPage}>
           Добавить страницу
         </Button>
@@ -176,9 +217,6 @@ export function DocumentScreen({ docId, onBack, onAddPage }: DocumentScreenProps
         >
           Удалить документ
         </Button>
-        <Text size="xs" c="dimmed" ta="center">
-          Экспорт в PDF — этап M7.
-        </Text>
       </Stack>
     </ScreenShell>
   )
