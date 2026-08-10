@@ -1,5 +1,5 @@
 import { bestPageImage } from '../page-image'
-import { opfsStorage } from '../storage/opfs-storage'
+import { documentStore } from '../storage/document-store'
 import type { Page } from '../types'
 import { assemblePdf, type PdfPageImage } from './assemble-pdf'
 import { deliverPdf } from './deliver'
@@ -27,7 +27,7 @@ export type ExportOutcome = { readonly ok: true } | { readonly ok: false; readon
  */
 export async function exportDocument(docId: string): Promise<ExportOutcome> {
   try {
-    const doc = await opfsStorage.getDocument(docId)
+    const doc = await documentStore.getDocument(docId)
     if (!doc) return { ok: false, error: 'Документ не найден.' }
     if (doc.pages.length === 0) return { ok: false, error: 'В документе нет страниц.' }
 

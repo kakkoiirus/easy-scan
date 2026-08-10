@@ -4,7 +4,7 @@ import type { ReactNode } from 'react'
 import { cameraController, type CapturedFrame } from '../camera/camera-controller'
 import { CornerEditorView, type CornerEditorHandle } from '../corner-editor/CornerEditorView'
 import { fullFrameQuad } from '../corner-editor/geometry'
-import { appendPage, createDocument, removeDocument } from '../storage/useDocuments'
+import { documentStore } from '../storage/document-store'
 import { cvClient } from '../worker/cv-client'
 import type { Quad } from '../types'
 
@@ -129,9 +129,9 @@ export function CameraScreen({ docId, onBack }: CameraScreenProps) {
     let targetId = docId
     try {
       if (!targetId) {
-        targetId = await createDocument(`Документ · ${new Date().toLocaleTimeString()}`)
+        targetId = await documentStore.createDocument(`Документ · ${new Date().toLocaleTimeString()}`)
       }
-      for (const page of pages) await appendPage(targetId, page.frame, page.quad)
+      for (const page of pages) await documentStore.appendPage(targetId, page.frame, page.quad)
       onBack()
     } catch {
       // New-document mode rolls the freshly-created Document back (remove it) so
@@ -143,7 +143,7 @@ export function CameraScreen({ docId, onBack }: CameraScreenProps) {
       // a page remove), so the in-memory session is kept for a retry in new-doc
       // mode only — in add-page mode the user should cancel (the saved pages
       // remain in the Document) rather than retry.
-      if (targetId && !docId) await removeDocument(targetId).catch(() => {})
+      if (targetId && !docId) await documentStore.removeDocument(targetId).catch(() => {})
       setSaving(false)
     }
   }

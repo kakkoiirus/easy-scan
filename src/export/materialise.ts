@@ -1,4 +1,4 @@
-import { setPageEnhanced, setPageFlat } from '../storage/useDocuments'
+import { documentStore } from '../storage/document-store'
 import type { Page } from '../types'
 import { cvClient } from '../worker/cv-client'
 import { readImageBytes } from './read-image'
@@ -25,7 +25,7 @@ export async function materialisePage(docId: string, page: Page): Promise<Page> 
       const source = await readImageBytes(current.file)
       const warped = await cvClient.warp(source, current.quad)
       if (warped.ok) {
-        const flat = await setPageFlat(docId, current.id, warped.bytes, warped.width, warped.height)
+        const flat = await documentStore.setPageFlat(docId, current.id, warped.bytes, warped.width, warped.height)
         current = { ...current, flat }
       }
     } catch {
@@ -38,7 +38,7 @@ export async function materialisePage(docId: string, page: Page): Promise<Page> 
       const flatBytes = await readImageBytes(current.flat.file)
       const result = await cvClient.enhance(flatBytes, current.enhanceMode)
       if (result.ok) {
-        const enhanced = await setPageEnhanced(
+        const enhanced = await documentStore.setPageEnhanced(
           docId,
           current.id,
           result.bytes,

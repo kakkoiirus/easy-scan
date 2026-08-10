@@ -20,6 +20,12 @@ _Avoid_: polygon, outline, contour, bounding box
 
 The look applied to a Page after flattening — chosen per page, in the browser.
 
+Each Page's flattened image is derived from its source photo and its **Quad**; its
+enhanced image is derived from the flat and the chosen look below. Changing the
+**Quad** invalidates both the flat and the enhanced; changing only the look
+invalidates the enhanced — so the Page re-flattens and/or re-enhances on the next
+view.
+
 **Color**:
 The page kept as a faithful colour photograph — only flattened, with a mild, global white-balance and contrast cleanup. Not vivid or "enhanced"; the default look.
 _Avoid_: original, photo (as a mode name), vivid, enhanced

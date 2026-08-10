@@ -3,17 +3,8 @@ import { useEffect, useRef, useState } from 'react'
 import { CornerEditorView, type CornerEditorHandle } from '../corner-editor/CornerEditorView'
 import { useImageSize } from '../corner-editor/useImageSize'
 import { opfsStorage } from '../storage/opfs-storage'
-import {
-  replacePageEnhanceMode,
-  replacePageEnhanced,
-  replacePageFlat,
-  replacePageQuad,
-  setPageEnhanced,
-  setPageFlat,
-  updatePageEnhanceMode,
-  updatePageQuad,
-} from '../storage/useDocuments'
-import type { Bytes, Document, EnhanceMode, Page } from '../types'
+import { documentStore } from '../storage/document-store'
+import type { Bytes, EnhanceMode, Page } from '../types'
 import { cvClient } from '../worker/cv-client'
 import { useObjectUrl } from './useObjectUrl'
 
@@ -25,16 +16,17 @@ import { useObjectUrl } from './useObjectUrl'
  * The parent mounts this with `key={page.id}`, so every piece of per-page state
  * (object URLs, in-flight guards, edit flags) is freshly initialised for the
  * selected page and torn down — object URLs revoked — when the selection moves.
- * All mutations flow up through `onDocChange`, which updates the single shared
- * Document so edits to one page survive switching to another.
+ * `page` is a reactive snapshot from the Document store (passed by the parent),
+ * and every mutation (warp, enhance, quad edit, mode switch) flows back through
+ * the store — so edits to one page survive switching to another, with no local
+ * mirroring.
  */
 interface PagePaneProps {
   readonly docId: string
   readonly page: Page
-  readonly onDocChange: (updater: (doc: Document) => Document) => void
 }
 
-export function PagePane({ docId, page, onDocChange }: PagePaneProps) {
+export function PagePane({ docId, page }: PagePaneProps) {
   const [sourceUrl, setSourceUrl] = useState<string | undefined>(undefined)
   const [editing, setEditing] = useState(false)
   const [savingQuad, setSavingQuad] = useState(false)
@@ -114,11 +106,10 @@ export function PagePane({ docId, page, onDocChange }: PagePaneProps) {
           setWarpError(result.error || 'Не удалось выровнять страницу')
           return
         }
-        const flat = await setPageFlat(docId, pageId, result.bytes, result.width, result.height)
-        // Reflect the persisted flat in the shared doc BEFORE bailing on cancel:
-        // the flat is already written, so updating here stops a later re-select
-        // of this page from re-warping (and overwriting) the same flat.
-        onDocChange((d) => replacePageFlat(d, pageId, flat))
+        await documentStore.setPageFlat(docId, pageId, result.bytes, result.width, result.height)
+        // The store reflects the persisted flat into the snapshot this component
+        // reads, so there is nothing to mirror — the effect's `page.flat` dep
+        // re-runs it and short-circuits on the next render.
         if (cancelled) return
       } catch (err) {
         if (cancelled) return
@@ -133,7 +124,7 @@ export function PagePane({ docId, page, onDocChange }: PagePaneProps) {
       cancelled = true
       warpInFlightRef.current = false
     }
-  }, [docId, page.id, page.flat, flatFile, sourceUrl, warpVersion, quadSig, onDocChange])
+  }, [docId, page.id, page.flat, flatFile, sourceUrl, warpVersion, quadSig])
 
   // Enhance the page in the worker once a flat exists but no enhanced result
   // does (first view, or after a corner edit / mode change invalidated it).
@@ -162,10 +153,9 @@ export function PagePane({ docId, page, onDocChange }: PagePaneProps) {
           setEnhanceError(result.error || 'Не удалось улучшить страницу')
           return
         }
-        const enhanced = await setPageEnhanced(docId, pageId, result.bytes, result.width, result.height)
-        // See the warp effect: persist already landed, so mirror it into the doc
-        // even on a mid-enhance unmount to avoid a redundant re-enhance.
-        onDocChange((d) => replacePageEnhanced(d, pageId, enhanced))
+        await documentStore.setPageEnhanced(docId, pageId, result.bytes, result.width, result.height)
+        // The store reflects the persisted enhanced result into the snapshot; no
+        // mirroring needed (see the warp effect).
         if (cancelled) return
       } catch (err) {
         if (cancelled) return
@@ -180,17 +170,16 @@ export function PagePane({ docId, page, onDocChange }: PagePaneProps) {
       cancelled = true
       enhanceInFlightRef.current = false
     }
-  }, [docId, page.id, page.flat, flatFile, enhancedFile, page.enhanceMode, enhanceVersion, onDocChange])
+  }, [docId, page.id, page.flat, flatFile, enhancedFile, page.enhanceMode, enhanceVersion])
 
   async function handleSaveQuad(): Promise<void> {
     const quad = editorRef.current?.getQuad()
     if (!quad) return
     setSavingQuad(true)
     try {
-      await updatePageQuad(docId, page.id, quad)
-      // Mirror the persisted Quad locally — replacePageQuad also drops the now-
-      // stale flat, so the effect above re-warps with the corrected corners.
-      onDocChange((d) => replacePageQuad(d, page.id, quad))
+      await documentStore.updatePageQuad(docId, page.id, quad)
+      // The store reflects the new Quad (and drops the now-stale flat) into the
+      // snapshot, so the warp effect re-runs with the corrected corners.
       setEditing(false)
     } finally {
       setSavingQuad(false)
@@ -198,20 +187,14 @@ export function PagePane({ docId, page, onDocChange }: PagePaneProps) {
   }
 
   /**
-   * Switch the page's enhance mode. Optimistic: the control snaps to the new
-   * mode and clears the cached enhanced image so the enhance effect re-runs off
-   * the flat with the new look; the persist follows, and rolls back on failure
-   * so the control never shows a mode that isn't actually stored.
+   * Switch the page's enhance mode. Persist-first: the store writes the mode and
+   * drops the now-stale enhanced result, then reflects both into the snapshot —
+   * so the control snaps to the new mode and the enhance effect re-runs off the
+   * flat with the new look, with no optimistic rollback to get right.
    */
   async function handleChangeEnhanceMode(mode: EnhanceMode): Promise<void> {
     if (page.enhanceMode === mode) return
-    const prev = page.enhanceMode
-    onDocChange((d) => replacePageEnhanceMode(d, page.id, mode))
-    try {
-      await updatePageEnhanceMode(docId, page.id, mode)
-    } catch {
-      onDocChange((d) => replacePageEnhanceMode(d, page.id, prev))
-    }
+    await documentStore.updatePageEnhanceMode(docId, page.id, mode)
   }
 
   // Full-screen boundary editor overlay. Shown only once the source photo and
