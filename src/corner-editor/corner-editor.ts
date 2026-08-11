@@ -1,5 +1,6 @@
 import type { Point, Quad } from '../types'
 import { clampPoint, hitRadius, nearestCornerIndex, type CornerImageSize } from './geometry'
+import type { Loupe } from './loupe'
 
 /**
  * Imperative corner-editor service (lives outside React's render cycle — see the
@@ -30,7 +31,14 @@ export interface CornerEditorController {
   readonly subscribe: (cb: () => void) => () => void
 }
 
-export function createCornerEditor(): CornerEditorController {
+/** Options for `createCornerEditor`. `loupe` is optional: when present it is
+ *  driven for touch drags only (mouse/pen are precise pointers, no loupe). */
+export interface CornerEditorOptions {
+  readonly loupe?: Loupe
+}
+
+export function createCornerEditor(options: CornerEditorOptions = {}): CornerEditorController {
+  const loupe = options.loupe ?? null
   let current: Quad | null = null
   let image: CornerImageSize | null = null
   let svg: SVGSVGElement | null = null
@@ -43,15 +51,20 @@ export function createCornerEditor(): CornerEditorController {
     for (const listener of listeners) listener()
   }
 
-  /** Map a screen (client) point to source-image pixel coords via the svg CTM.
-   *  Accounts for the `xMidYMid meet` letterboxing, so grabs track the visible
-   *  photo exactly. Returns null if the svg isn't measurable yet.
+  /** Map a screen (client) point to source-image pixel coords via the svg CTM,
+   *  and report the CTM's scale (CSS-px-per-image-px) — the loupe needs it for
+   *  its crop-size formula. Accounts for the `xMidYMid meet` letterboxing, so
+   *  grabs track the visible photo exactly. Returns null if the svg isn't
+   *  measurable yet.
    *
    *  Uses the classic `createSVGPoint` + `matrixTransform` form because
    *  `getScreenCTM()` may return a legacy `SVGMatrix` (no `transformPoint`),
    *  so the newer `DOMPoint`/`DOMMatrix.transformPoint` API can't be relied on
    *  across browsers. */
-  function clientToImage(clientX: number, clientY: number): Point | null {
+  function resolvePointer(
+    clientX: number,
+    clientY: number,
+  ): { point: Point; scale: number } | null {
     if (!svg) return null
     const ctm = svg.getScreenCTM()
     if (!ctm) return null
@@ -59,14 +72,14 @@ export function createCornerEditor(): CornerEditorController {
     pt.x = clientX
     pt.y = clientY
     const img = pt.matrixTransform(ctm.inverse())
-    return { x: img.x, y: img.y }
+    return { point: { x: img.x, y: img.y }, scale: ctm.a }
   }
 
   function onPointerDown(e: PointerEvent): void {
     if (current === null || image === null) return
-    const p = clientToImage(e.clientX, e.clientY)
-    if (!p) return
-    const idx = nearestCornerIndex(current, p, hitRadius(image))
+    const resolved = resolvePointer(e.clientX, e.clientY)
+    if (!resolved) return
+    const idx = nearestCornerIndex(current, resolved.point, hitRadius(image))
     if (idx === null) return
     activeIndex = idx
     e.preventDefault() // suppress text-selection / image drag
@@ -75,13 +88,19 @@ export function createCornerEditor(): CornerEditorController {
     } catch {
       // Some browsers throw if the pointer is already released; safe to ignore.
     }
+    // Touch only: a finger covers the corner it's dragging, so reveal the loupe
+    // straight away (centered on the grabbed corner, anchored to the finger).
+    if (e.pointerType === 'touch' && loupe) {
+      loupe.show()
+      loupe.move(current[idx], { x: e.clientX, y: e.clientY }, resolved.scale)
+    }
   }
 
   function onPointerMove(e: PointerEvent): void {
     if (activeIndex === null || current === null || image === null) return
-    const p = clientToImage(e.clientX, e.clientY)
-    if (!p) return
-    const clamped = clampPoint(p, image)
+    const resolved = resolvePointer(e.clientX, e.clientY)
+    if (!resolved) return
+    const clamped = clampPoint(resolved.point, image)
     // Move only the grabbed corner; the other three keep their places, so the
     // TL/TR/BR/BL ordering is preserved by construction.
     const next: Quad = [
@@ -92,6 +111,12 @@ export function createCornerEditor(): CornerEditorController {
     ]
     current = next
     e.preventDefault()
+    // The loupe crop follows the *clamped* corner (where the dot actually is),
+    // while its on-screen position tracks the *finger* — they diverge at image
+    // edges, where the user must see the corner, not the finger.
+    if (e.pointerType === 'touch' && loupe) {
+      loupe.move(clamped, { x: e.clientX, y: e.clientY }, resolved.scale)
+    }
     emit()
   }
 
@@ -103,6 +128,7 @@ export function createCornerEditor(): CornerEditorController {
     } catch {
       // Pointer may already be released; safe to ignore.
     }
+    if (e.pointerType === 'touch' && loupe) loupe.hide()
   }
 
   /** Cancel the browser's native image drag-and-drop, which on mouse otherwise

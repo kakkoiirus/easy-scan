@@ -8,6 +8,7 @@ import {
 import type { Point, Quad } from '../types'
 import { createCornerEditor, type CornerEditorController } from './corner-editor'
 import type { CornerImageSize } from './geometry'
+import { createLoupe, type Loupe } from './loupe'
 
 /**
  * The page/boundary editor: the source photo with four draggable corners over
@@ -41,9 +42,15 @@ interface CornerEditorViewProps {
 export const CornerEditorView = forwardRef<CornerEditorHandle, CornerEditorViewProps>(
   function CornerEditorView({ image, src, initialQuad, className }, ref) {
     const svgRef = useRef<SVGSVGElement>(null)
+    // One touch-loupe per mount; created once and kept across renders. Driven by
+    // the controller for touch drags, so both editor surfaces (post-capture
+    // review and saved-Page re-edit) get it for free via this shared view.
+    const loupeRef = useRef<Loupe | null>(null)
+    if (loupeRef.current === null) loupeRef.current = createLoupe()
+    const loupe = loupeRef.current
     // One controller per mount; created once and kept across renders.
     const editorRef = useRef<CornerEditorController | null>(null)
-    if (editorRef.current === null) editorRef.current = createCornerEditor()
+    if (editorRef.current === null) editorRef.current = createCornerEditor({ loupe })
     const editor = editorRef.current
 
     const quad = useSyncExternalStore(editor.subscribe, editor.getQuad, editor.getQuad)
@@ -58,6 +65,20 @@ export const CornerEditorView = forwardRef<CornerEditorHandle, CornerEditorViewP
       if (!svgRef.current) return
       return editor.attach(svgRef.current)
     }, [editor])
+
+    // The loupe canvas lives for the editor's life: mounted into document.body
+    // here, fully torn down on unmount (canvas removed + any in-flight image
+    // decode aborted). It is shown/moved/hidden by the controller.
+    useEffect(() => {
+      loupe.mount()
+      return () => loupe.destroy()
+    }, [loupe])
+
+    // Point the loupe at the source photo, and re-decode if the edited page
+    // changes (so the magnified image is always the right one).
+    useEffect(() => {
+      loupe.setSource(src)
+    }, [loupe, src])
 
     // Image dimensions are config for clamp + hit-radius, not a reason to
     // re-bind. Primitive deps so a new parent object (common each render) can't
