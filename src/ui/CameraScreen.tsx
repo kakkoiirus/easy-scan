@@ -1,4 +1,4 @@
-import { Badge, Button, Group, Loader, Stack, Text } from '@mantine/core'
+import { Badge, Button, Group, Loader, Modal, Stack, Text } from '@mantine/core'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import { cameraController, type CapturedFrame } from '../camera/camera-controller'
@@ -6,6 +6,7 @@ import { CornerEditorView, type CornerEditorHandle } from '../corner-editor/Corn
 import { fullFrameQuad } from '../corner-editor/geometry'
 import { documentStore } from '../storage/document-store'
 import { cvClient } from '../worker/cv-client'
+import type { CameraSnapshot } from '../back-nav/useBackHandler'
 import type { Quad } from '../types'
 
 interface CameraScreenProps {
@@ -13,6 +14,15 @@ interface CameraScreenProps {
    *  appended into this Document on "Готово" instead of starting a new one.
    *  Absent → "capture a new Document" mode. */
   readonly docId?: string
+  /** Push the camera's unsaved-batch snapshot to the back handler, so a gesture
+   *  back can decide prompt vs navigate. Called whenever the snapshot changes. */
+  registerSnapshot: (snapshot: CameraSnapshot) => void
+  /** Show the discard confirm (a gesture back pressed with unsaved Pages). */
+  readonly prompting: boolean
+  /** «Сбросить»: discard the unsaved batch and leave the camera. */
+  onConfirmDiscard: () => void
+  /** «Продолжить скан»: keep the batch and stay on the camera. */
+  onCancelDiscard: () => void
   onBack: () => void
 }
 
@@ -34,7 +44,14 @@ interface SessionPage {
   readonly quad: Quad
 }
 
-export function CameraScreen({ docId, onBack }: CameraScreenProps) {
+export function CameraScreen({
+  docId,
+  registerSnapshot,
+  prompting,
+  onConfirmDiscard,
+  onCancelDiscard,
+  onBack,
+}: CameraScreenProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const editorRef = useRef<CornerEditorHandle>(null)
   const status = useSyncExternalStore(
@@ -46,6 +63,11 @@ export function CameraScreen({ docId, onBack }: CameraScreenProps) {
   const [session, setSession] = useState<readonly SessionPage[]>([])
   const [capturing, setCapturing] = useState(false)
   const [saving, setSaving] = useState(false)
+
+  // Pages captured but not yet saved via «Готово»: the stashed session plus the
+  // page currently under review (captured, not yet stashed). Both are lost on a
+  // discard, so both count — for the confirm title and the back-handler snapshot.
+  const unsavedCount = session.length + (review ? 1 : 0)
 
   // Permission requested only on mount; start/stop are generation-guarded (no leaks).
   useEffect(() => {
@@ -60,6 +82,13 @@ export function CameraScreen({ docId, onBack }: CameraScreenProps) {
     if (!url) return
     return () => URL.revokeObjectURL(url)
   }, [review?.url])
+
+  // Report the unsaved-batch snapshot to the back handler so a gesture back can
+  // decide prompt vs navigate. The state lives here; the handler reads it
+  // synchronously on `popstate`.
+  useEffect(() => {
+    registerSnapshot({ unsavedCount, saving })
+  }, [registerSnapshot, unsavedCount, saving])
 
   async function handleShutter(): Promise<void> {
     setCapturing(true)
@@ -280,8 +309,39 @@ export function CameraScreen({ docId, onBack }: CameraScreenProps) {
           )}
         </div>
       )}
+
+      {/* Discard guard for the back gesture (see useBackHandler). An on-screen
+          «Отмена» is an explicit discard and bypasses this; the gesture is
+          reflexive, so it asks first. Escape / backdrop = continue scanning. */}
+      <Modal
+        opened={prompting}
+        onClose={onCancelDiscard}
+        title={`Сбросить ${unsavedCount} ${pagesAccusative(unsavedCount)}?`}
+        centered
+        size="sm"
+      >
+        <Group justify="flex-end" gap="xs">
+          <Button variant="subtle" color="gray" onClick={onCancelDiscard}>
+            Продолжить скан
+          </Button>
+          <Button color="red" onClick={onConfirmDiscard}>
+            Сбросить
+          </Button>
+        </Group>
+      </Modal>
     </div>
   )
+}
+
+/** Russian accusative plural of «страница» for the discard-confirm title — the
+ *  object of «Сбросить N …». 1 → «страницу», 2–4 → «страницы», the rest (0, 5–9,
+ *  11–14, …) → «страниц». */
+function pagesAccusative(count: number): string {
+  const mod10 = count % 10
+  const mod100 = count % 100
+  if (mod10 === 1 && mod100 !== 11) return 'страницу'
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'страницы'
+  return 'страниц'
 }
 
 /** Centered overlay with a dimmed backdrop for loading / denied / error states. */
