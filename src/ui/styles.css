@@ -52,10 +52,17 @@ body {
   flex: 1;
   overflow-y: auto;
   padding: 16px;
+  padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+}
+
+/* When the fixed dev bar is present it overlaps the bottom of the scroll area,
+   so reserve room for it. The bar only renders under import.meta.env.DEV, so
+   this never matches in production. */
+.content:has(.devbar) {
   padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
 }
 
-/* Dev bar (temporary — remove when real capture lands) */
+/* Dev bar — rendered only under import.meta.env.DEV (see DevBar.tsx). */
 .devbar {
   position: fixed;
   left: 0;
