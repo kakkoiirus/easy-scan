@@ -11,7 +11,11 @@ export default defineConfig(({ command, isPreview }) => ({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'autoUpdate',
+      // `prompt` (not `autoUpdate`): the waiting service worker is NOT
+      // auto-activated, so a deploy never silently reloads under the user (or
+      // mid-scan). Instead the update prompt surfaces the waiting SW and the
+      // reload is driven by the user's choice (see .scratch/app-update/spec.md).
+      registerType: 'prompt',
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'],
         // The CV worker bundles OpenCV.js inline (~16 MB, embedded wasm — no
